@@ -13,5 +13,5 @@ The author of this concept, Maxim Zhadobin, hereby publishes this specification 
 This publication is released under the Creative Commons Attribution 4.0 International License (CC BY 4.0).
 Users are free to share and adapt the materials, with attribution.
 
-Publication date: [insert actual GitHub commit date or release date]
+Publication date: 28.05.2025
 Author: Maxim Zhadobin
