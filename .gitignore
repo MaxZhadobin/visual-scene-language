@@ -1,0 +1,15 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Test coverage
+coverage/
+
+# Task-context runtime logs (check_runs и пр.) остаются в .taocoder, но кэш IDE скрыт
+.DS_Store
+
+.taocoder/
+test-results/
+*.log

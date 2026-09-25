@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Shop — VSL E2E Fixture</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 0; padding: 16px; }
+    h1 { font-size: 24px; }
+    .products { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 16px; }
+    .card { border: 1px solid #e5e7eb; border-radius: 8px; padding: 16px; }
+    .card h2 { font-size: 16px; margin: 0 0 8px; }
+    .card .price { font-size: 18px; font-weight: 700; color: #059669; }
+    .card button { margin-top: 12px; padding: 8px 16px; background: #2563eb; color: #fff; border: none; border-radius: 4px; cursor: pointer; }
+    .card button:hover { background: #1d4ed8; }
+    #cart { position: fixed; top: 16px; right: 16px; background: #fef3c7; border: 1px solid #f59e0b; padding: 12px; border-radius: 8px; min-width: 160px; }
+    #cart h3 { margin: 0 0 8px; font-size: 14px; }
+    #cart-count { font-size: 24px; font-weight: 700; }
+  </style>
+</head>
+<body>
+  <h1>Products</h1>
+  <div id="cart" role="status" aria-live="polite">
+    <h3>Cart</h3>
+    <span id="cart-count">0</span> items
+  </div>
+  <div class="products">
+    <div class="card">
+      <h2>Wireless Headphones</h2>
+      <p class="price">$79.99</p>
+      <button data-product="headphones" aria-label="Add Wireless Headphones to cart">Add to cart</button>
+    </div>
+    <div class="card">
+      <h2>Mechanical Keyboard</h2>
+      <p class="price">$129.99</p>
+      <button data-product="keyboard" aria-label="Add Mechanical Keyboard to cart">Add to cart</button>
+    </div>
+    <div class="card">
+      <h2>USB-C Hub</h2>
+      <p class="price">$49.99</p>
+      <button data-product="hub" aria-label="Add USB-C Hub to cart">Add to cart</button>
+    </div>
+  </div>
+  <script>
+    var count = 0;
+    document.querySelectorAll('.card button').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        count++;
+        document.getElementById('cart-count').textContent = String(count);
+      });
+    });
+  </script>
+</body>
+</html>

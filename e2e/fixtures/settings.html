@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Settings — VSL E2E Fixture</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 480px; margin: 80px auto; padding: 0 16px; }
+    h1 { font-size: 24px; margin-bottom: 24px; }
+    .setting { margin-bottom: 20px; }
+    label { display: block; font-weight: 600; margin-bottom: 4px; }
+    select { width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 14px; }
+    button { padding: 10px 24px; background: #2563eb; color: #fff; border: none; border-radius: 4px; font-size: 16px; cursor: pointer; }
+    button:hover { background: #1d4ed8; }
+    #saved { margin-top: 16px; padding: 12px; background: #f0fdf4; border: 1px solid #86efac; border-radius: 4px; display: none; }
+  </style>
+</head>
+<body>
+  <h1>Settings</h1>
+  <div class="setting">
+    <label for="language">Language</label>
+    <select id="language" aria-label="Select language">
+      <option value="en">English</option>
+      <option value="ru">Русский</option>
+      <option value="es">Español</option>
+      <option value="de">Deutsch</option>
+    </select>
+  </div>
+  <div class="setting">
+    <label for="theme">Theme</label>
+    <select id="theme" aria-label="Select theme">
+      <option value="light">Light</option>
+      <option value="dark">Dark</option>
+    </select>
+  </div>
+  <button id="save-btn">Save</button>
+  <div id="saved" role="status" aria-live="polite"></div>
+  <script>
+    document.getElementById('save-btn').addEventListener('click', function() {
+      var lang = document.getElementById('language').value;
+      var theme = document.getElementById('theme').value;
+      var saved = document.getElementById('saved');
+      saved.style.display = 'block';
+      saved.textContent = 'Settings saved: language=' + lang + ', theme=' + theme;
+    });
+  </script>
+</body>
+</html>

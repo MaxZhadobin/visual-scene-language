@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "VSL Agent",
+  "version": "0.1.0",
+  "description": "VSL agent: page snapshot, LLM decision, DOM execution (M1.4)",
+  "background": {
+    "service_worker": "dist/background.global.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["dist/content.global.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "VSL Agent"
+  },
+  "permissions": ["storage"],
+  "host_permissions": ["<all_urls>"]
+}
