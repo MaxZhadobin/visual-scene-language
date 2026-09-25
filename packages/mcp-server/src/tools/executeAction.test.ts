@@ -10,7 +10,9 @@
  *  - Ленивая навигация: пропуск если snapshotUrl отсутствует
  *  - Выполнение действия click
  *  - Выполнение действия type (с value)
+ *  - Выполнение действия fill (алиас type, с value)
  *  - Выполнение действия type (без value → ошибка)
+ *  - Выполнение действия fill (без value → ошибка)
  *  - Выполнение действия scroll
  *  - Выполнение действия select (с value)
  *  - Выполнение действия hover
@@ -235,6 +237,29 @@ describe('vsl_execute_action', () => {
       expect(result.status).toBe('success');
       expect(result.data?.action).toBe('type');
       expect(mockBrowser.evaluate).toHaveBeenCalled();
+    });
+
+    it('выполняет действие fill как алиас для type', async () => {
+      const result = await handleExecuteAction(
+        { action: 'fill', target_id: 'input_0', value: 'test text' },
+        mockBrowser,
+        mockSession,
+      );
+
+      expect(result.status).toBe('success');
+      expect(result.data?.action).toBe('fill');
+      expect(mockBrowser.evaluate).toHaveBeenCalled();
+    });
+
+    it('возвращает ошибку для fill без value', async () => {
+      const result = await handleExecuteAction(
+        { action: 'fill', target_id: 'input_0' },
+        mockBrowser,
+        mockSession,
+      );
+
+      expect(result.status).toBe('error');
+      expect(result.error).toContain('value is required for type action');
     });
 
     it('возвращает ошибку для type без value', async () => {

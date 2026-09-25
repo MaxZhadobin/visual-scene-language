@@ -163,14 +163,18 @@ export async function handleDownload(
 
     // 7. Если указан save_path — сохраняем файл
     if (args.save_path && result.status === 'completed') {
-      // Path traversal protection: validate save_path before saving
-      const resolvedBase = path.resolve((await import('node:os')).homedir(), '.vsl', 'downloads');
-      const resolvedSave = path.resolve(resolvedBase, args.save_path);
-      if (!resolvedSave.startsWith(resolvedBase + path.sep) && resolvedSave !== resolvedBase) {
-        return {
-          status: 'error',
-          error: `Path traversal detected: save_path '${args.save_path}' escapes downloads directory`,
-        };
+      // Для абсолютных путей — используем напрямую (пользователь явно указал путь)
+      // Для относительных путей — разрешаем относительно downloads dir с path traversal проверкой
+      const isAbsolute = args.save_path.startsWith('/');
+      if (!isAbsolute) {
+        const resolvedBase = path.resolve((await import('node:os')).homedir(), '.vsl', 'downloads');
+        const resolvedSave = path.resolve(resolvedBase, args.save_path);
+        if (!resolvedSave.startsWith(resolvedBase + path.sep) && resolvedSave !== resolvedBase) {
+          return {
+            status: 'error',
+            error: `Path traversal detected: save_path '${args.save_path}' escapes downloads directory`,
+          };
+        }
       }
       await browser.saveDownload(downloadId, args.save_path);
       result.path = args.save_path;

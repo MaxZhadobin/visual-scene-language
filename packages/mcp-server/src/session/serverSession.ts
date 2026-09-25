@@ -12,9 +12,9 @@
  *  - setOnSnapshotChange() — зарегистрировать callback для уведомлений
  */
 
-import type { VslDocument } from '@vsl/sdk';
-import { diffVslDocuments } from '@vsl/sdk';
-import type { DiffOptions, VslDiff } from '@vsl/sdk';
+import type { VslDocument } from '@thinkingos/vsl-sdk';
+import { diffVslDocuments } from '@thinkingos/vsl-sdk';
+import type { DiffOptions, VslDiff } from '@thinkingos/vsl-sdk';
 
 /**
  * Серверная snapshot session.

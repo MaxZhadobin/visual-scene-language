@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, jest } from '@jest/globals';
 import { ServerSession } from './serverSession.js';
-import type { VslDocument } from '@vsl/sdk';
+import type { VslDocument } from '@thinkingos/vsl-sdk';
 
 /** Минимальный VSL document для тестов. */
 function makeDoc(id: string): VslDocument {

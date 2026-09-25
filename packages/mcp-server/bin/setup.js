@@ -98,9 +98,11 @@ function checkPlaywrightInstalled() {
   }
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function checkChromiumInstalled() {
   try {
     // Проверяем, установлен ли chromium браузер
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const result = execSync('npx playwright install --dry-run 2>&1 || true', {
       encoding: 'utf-8',
       timeout: 10000,
@@ -387,7 +389,7 @@ function printAgentInstructions(visionConfig) {
     log(`  ${C.bold}Arguments:${C.reset}     ${mcpServerPath}`);
   } else {
     log(`  ${C.bold}Command:${C.reset}       npx`);
-    log(`  ${C.bold}Arguments:${C.reset}     @vsl/mcp-server`);
+    log(`  ${C.bold}Arguments:${C.reset}     @thinkingos/vsl-mcp-server`);
   }
 
   if (envLines.length > 0) {
@@ -407,7 +409,7 @@ function printAgentInstructions(visionConfig) {
       vsl: {
         ...(hasLocalDist
           ? { command: 'node', args: [mcpServerPath] }
-          : { command: 'npx', args: ['@vsl/mcp-server'] }),
+          : { command: 'npx', args: ['@thinkingos/vsl-mcp-server'] }),
         ...(Object.keys(envJson).length > 0 ? { env: envJson } : {}),
       },
     },

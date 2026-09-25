@@ -42,7 +42,7 @@ VSL **не является** UI-приложением — это инфрас�
 ### Для AI-агента (как начать работу с VSL):
 
 // 1. Импортировать SDK
-import { VSLClient } from '@vsl/sdk';
+import { VSLClient } from '@thinkingos/vsl-sdk';
 
 // 2. Инициализировать клиент
 const vsl = new VSLClient({
@@ -95,6 +95,7 @@ await vsl.refresh();  // принудительное обновление snaps
 | [DECISIONS.md](./DECISIONS.md) | Все принятые архитектурные решения (DEC-001 — DEC-023) с контекстом и обоснованием | ✅ Готов |
 | [ROADMAP.md](./ROADMAP.md) | План реализации: 6 фаз (Web → Desktop → Mobile → Extended Domains → Humanization → Ecosystem), ~36-52 недели | ✅ Готов |
 | [CHECK_ALL.md](./CHECK_ALL.md) | Контракт чек-пайплайна: quality gates S0–S7 (python S0–S4 + TypeScript S5–S7: lint/typecheck/build+tests), запуск, интерпретация сбоев, логи | ✅ Готов |
+| [PUBLISHING.md](./PUBLISHING.md) | Инструкция по публикации пакетов @thinkingos/* на npm: prerequisites, token setup, build, publish, version management | ✅ Готов |
 
 ---
 
@@ -180,7 +181,7 @@ VSL кэширует статические элементы и передаёт
 
 **Средняя экономия:** 60–80% после первого вызова.
 
-**Реализация (M1.2, `@vsl/sdk`):**
+**Реализация (M1.2, `@thinkingos/vsl-sdk`):**
 
 - **Cache Store** (`createCacheStore()`): in-memory Map id → {object, contentHash, coordHash}; sha256 по детерминированной сериализации (contentHash: t/r/st/txt/act; coordHash: p/s).
 - **Invalidation-триггеры** (VslSnapshotSession): URL change → полный сброс кэша; viewport resize → сброс только координат (`invalidateCoordinates()`); DOM-мутации → `attachMutationObserver(root, store)` точечно инвалидирует изменённые элементы.
@@ -198,7 +199,7 @@ VSL поддерживает полный набор действий:
 **Расширенные:** drag, drop, submit, reset, open, close, expand, collapse, wait, download
 **Навигационные:** navigate, go_back, go_forward, refresh
 
-**Реализация (M1.3, `@vsl/sdk`):** `VALID_ACTIONS` (24 действия) и `TARGET_ACTIONS` в `src/llm/actions.ts` — единый источник правды для enum в tool-схеме и system prompt; `validateAction` валидирует ответ модели (whitelist действия + существование target_id в VSL JSON).
+**Реализация (M1.3, `@thinkingos/vsl-sdk`):** `VALID_ACTIONS` (24 действия) и `TARGET_ACTIONS` в `src/llm/actions.ts` — единый источник правды для enum в tool-схеме и system prompt; `validateAction` валидирует ответ модели (whitelist действия + существование target_id в VSL JSON).
 
 → Подробнее: [ARCHITECTURE.md §7](./ARCHITECTURE.md), [DESIGN_SYSTEM.md §3.4](./DESIGN_SYSTEM.md)
 
@@ -355,7 +356,7 @@ const snapshotWithVisuals = await vsl.getSnapshot({ includeVisualFragments: true
 
 **Реализация M1.2 — VslSnapshotSession** (первый вызов → VslDocument, далее → VslDiff):
 
-// (M1.2, @vsl/sdk)
+// (M1.2, @thinkingos/vsl-sdk)
 const session = new VslSnapshotSession(createCacheStore());
 
 const first = session.snapshot(document.body, { url: location.href, viewport: { width: 1280, height: 800 } });
@@ -443,10 +444,10 @@ const customAdapter = new CustomLLMAdapter({
   promptTemplate: '...'
 });
 
-**Реализация M1.3 — OpenAIAdapter / AnthropicAdapter (@vsl/sdk):**
+**Реализация M1.3 — OpenAIAdapter / AnthropicAdapter (@thinkingos/vsl-sdk):**
 
-// (M1.3, @vsl/sdk) — оба адаптера реализуют LlmAdapter: sendPrompt(vslJson, task) + decide({vslJson, goal})
-import { OpenAIAdapter, AnthropicAdapter } from '@vsl/sdk';
+// (M1.3, @thinkingos/vsl-sdk) — оба адаптера реализуют LlmAdapter: sendPrompt(vslJson, task) + decide({vslJson, goal})
+import { OpenAIAdapter, AnthropicAdapter } from '@thinkingos/vsl-sdk';
 
 const openai = new OpenAIAdapter({ apiKey: process.env.OPENAI_API_KEY }); // model по умолчанию gpt-4o
 const action = await openai.decide({ vslJson: snapshot, goal: 'Fill the form and submit' });
@@ -497,7 +498,7 @@ MCP (Model Context Protocol) Server — рекомендуемый способ 
   "mcpServers": {
     "vsl": {
       "command": "npx",
-      "args": ["@vsl/mcp-server"],
+      "args": ["@thinkingos/vsl-mcp-server"],
       "env": {
         "VSL_PLATFORM": "web",
         "VSL_LLM_PROVIDER": "anthropic",
@@ -530,11 +531,11 @@ MCP (Model Context Protocol) Server — рекомендуемый способ 
 ```
 AI Agent (Claude/Cline/TaoCoder)
     ↓ MCP Protocol (JSON-RPC over stdio)
-VSL MCP Server (@vsl/mcp-server)
+VSL MCP Server (@thinkingos/vsl-mcp-server
     ↓ Internal API
-Core SDK (@vsl/sdk)
+Core SDK (@thinkingos/vsl-sdk)
     ↓ Chrome Extension Messaging
-Chrome Extension (@vsl/extension)
+Chrome Extension (@thinkingos/extension)
     ↓ DOM API
 Web Page
 ```

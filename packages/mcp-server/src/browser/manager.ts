@@ -278,14 +278,19 @@ export class BrowserManager {
       throw new Error(`Download not found: ${downloadId}`);
     }
 
-    // Path traversal protection: resolve to absolute and check within downloadsPath
-    const resolvedBase = path.resolve(this.config.downloadsPath.replace(/^~/, os.homedir()));
-    const resolvedSave = path.resolve(resolvedBase, savePath);
-    if (!resolvedSave.startsWith(resolvedBase + path.sep) && resolvedSave !== resolvedBase) {
-      throw new Error(`Path traversal detected: save_path '${savePath}' escapes downloads directory '${resolvedBase}'`);
+    // Для абсолютных путей — используем напрямую (пользователь явно указал путь)
+    // Для относительных путей — разрешаем относительно downloadsPath с path traversal проверкой
+    const isAbsolute = savePath.startsWith('/');
+    if (isAbsolute) {
+      await download.saveAs(savePath);
+    } else {
+      const resolvedBase = path.resolve(this.config.downloadsPath.replace(/^~/, os.homedir()));
+      const resolvedSave = path.resolve(resolvedBase, savePath);
+      if (!resolvedSave.startsWith(resolvedBase + path.sep) && resolvedSave !== resolvedBase) {
+        throw new Error(`Path traversal detected: save_path '${savePath}' escapes downloads directory '${resolvedBase}'`);
+      }
+      await download.saveAs(resolvedSave);
     }
-
-    await download.saveAs(resolvedSave);
   }
 
   /**

@@ -57,10 +57,24 @@ export async function handleGetVisual(
         error: 'Playwright is not installed. Install it with: npm install playwright',
       };
     }
+    // 3. Special case: root_0 — screenshot entire page
+    if (args.element_id === 'root_0') {
+      const page = await browser.getPage();
+      const screenshotBuffer = await page.screenshot({ type: 'png', fullPage: false });
+      const base64Image = screenshotBuffer.toString('base64');
+      return {
+        status: 'success',
+        data: {
+          element_id: args.element_id,
+          image: base64Image,
+          mediaType: 'image/png',
+        },
+      };
+    }
 
-    // 3. Ищем элемент и делаем скриншот
+    // 4. Ищем элемент и делаем скриншот
     //    Используем CSS selector для поиска элемента
-    const selector = `[data-vsl-id="${args.element_id}"], #${args.element_id}, .${args.element_id}`;
+    const selector = `[data-vsl-id="${args.element_id}"], #${args.element_id}, [id="${args.element_id}"]`;
 
     // Проверяем, что элемент существует
     const elementExists = await browser.evaluate((sel: string) => {
@@ -70,7 +84,7 @@ export async function handleGetVisual(
     if (!elementExists) {
       return {
         status: 'error',
-        error: `Element not found: ${args.element_id}`,
+        error: `Element not found: ${args.element_id}. Note: vsl_get_visual works with IDs from vsl_get_snapshot (browser DOM), not vsl_read_page (semantic IDs).`,
       };
     }
 

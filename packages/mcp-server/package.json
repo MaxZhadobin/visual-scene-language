@@ -1,6 +1,6 @@
 {
-  "name": "@vsl/mcp-server",
-  "version": "0.1.0",
+  "name": "@thinkingos/vsl-mcp-server",
+  "version": "0.1.1",
   "description": "VSL MCP Server — Model Context Protocol integration for AI agents (Claude Desktop, Cline, TaoCoder)",
   "license": "SEE LICENSE IN LICENSE.txt",
   "type": "module",
@@ -31,7 +31,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.4",
-    "@vsl/sdk": "^0.1.0",
+    "@thinkingos/vsl-sdk": "^0.1.1",
     "cheerio": "^1.0.0-rc.12"
   },
   "devDependencies": {

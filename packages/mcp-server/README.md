@@ -1,10 +1,26 @@
-# @vsl/mcp-server
+# @thinkingos/vsl-mcp-server
 
 VSL MCP Server — интеграция Visual Scene Language с AI-агентами через [Model Context Protocol](https://modelcontextprotocol.io/) (MCP 2025-11-25).
 
 Позволяет AI-агентам (Claude Desktop, Cline, TaoCoder) взаимодействовать с веб-страницами через семантическую структуру VSL: читать страницы, выполнять действия, получать диффы изменений.
 
-## Установка
+## Быстрая установка (одна команда)
+
+# Через npx — автоматически скачивает пакет и запускает интерактивный setup:
+
+
+npx -p @thinkingos/vsl-mcp-server mcp-server-setup
+
+
+Setup скрипт поможет вам:
+1. Проверить Node.js >= 18
+2. Установить Playwright (опционально, для браузерных инструментов)
+3. Настроить API ключи для vision-backend (OpenAI / Anthropic / Custom)
+4. Проверить работоспособность API (тестовый запрос)
+5. Сохранить конфигурацию в `~/.vsl/config.json`
+6. Получить инструкции для подключения к агенту
+
+## Установка из исходников (для разработчиков)
 
 ### Из корня monorepo
 
@@ -86,7 +102,7 @@ export VSL_VISION_MODEL="meta-llama/Llama-Vision"
 Выполнить действие над элементом VSL.
 
 **Параметры:**
-- `action` (string, required) — имя действия: `click`, `type`, `scroll`, `select`, `hover`, `focus`, `blur`, `check`, `uncheck`, `press`
+- `action` (string, required) — имя действия: `click`, `type`, `fill` (алиас `type`), `scroll`, `select`, `hover`, `focus`, `blur`, `check`, `uncheck`, `press`
 - `target_id` (string, required) — ID элемента в VSL JSON
 - `value` (string, optional) — значение для действия (текст для `type`, опция для `select`)
 
@@ -262,7 +278,7 @@ Agent: vsl_get_full_json()
                    │ MCP (JSON-RPC over stdio)
                    ▼
 ┌─────────────────────────────────────────────┐
-│  @vsl/mcp-server                            │
+│  @thinkingos/vsl-mcp-server                    │
 │  ├── Tools (8): snapshot, diff, action,     │
 │  │            navigate, cache, visual,      │
 │  │            read_page, full_json          │
@@ -272,7 +288,7 @@ Agent: vsl_get_full_json()
 │  ├── ServerSession (snapshot state + diff)  │
 │  └── Config (env + config file)             │
 └──────────────────┬──────────────────────────┘
-                   │ @vsl/sdk
+                   │ @thinkingos/vsl-sdk
                    ▼
 ┌─────────────────────────────────────────────┐
 │  VSL Core SDK                               │

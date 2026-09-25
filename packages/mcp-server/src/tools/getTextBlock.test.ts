@@ -13,7 +13,7 @@
 import { describe, it, expect, beforeEach, jest } from '@jest/globals';
 import { handleGetTextBlock } from './getTextBlock.js';
 import type { ServerSession } from '../session/serverSession.js';
-import type { VslDocument } from '@vsl/sdk';
+import type { VslDocument } from '@thinkingos/vsl-sdk';
 
 describe('vsl_get_text_block', () => {
   let mockSession: jest.Mocked<ServerSession>;

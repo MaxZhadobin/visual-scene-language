@@ -26,6 +26,7 @@ import type { ServerSession } from '../session/serverSession.js';
 const VALID_ACTIONS = [
   'click',
   'type',
+  'fill', // alias for type — convenience for LLM agents
   'scroll',
   'select',
   'hover',
@@ -132,6 +133,7 @@ export async function handleExecuteAction(
         }, selector);
         break;
 
+      case 'fill':
       case 'type':
         if (!args.value) {
           return {
@@ -139,10 +141,16 @@ export async function handleExecuteAction(
             error: 'value is required for type action',
           };
         }
-        await browser.evaluate((sel: string, val: string) => {
+        await browser.evaluate(({ sel, val }: { sel: string; val: string }) => {
           const el = document.querySelector(sel) as HTMLInputElement;
-          if (el) el.value = val;
-        }, selector, args.value);
+          if (el) {
+            el.value = val;
+            // Dispatch input+change events for React compatibility (AC[2]):
+            // React controlled components update only via events, not direct .value changes
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+          }
+        }, { sel: selector, val: args.value });
         break;
 
       case 'scroll':
@@ -162,10 +170,10 @@ export async function handleExecuteAction(
             error: 'value is required for select action',
           };
         }
-        await browser.evaluate((sel: string, val: string) => {
+        await browser.evaluate(({ sel, val }: { sel: string; val: string }) => {
           const el = document.querySelector(sel) as HTMLSelectElement;
           if (el) el.value = val;
-        }, selector, args.value);
+        }, { sel: selector, val: args.value });
         break;
 
       case 'hover':

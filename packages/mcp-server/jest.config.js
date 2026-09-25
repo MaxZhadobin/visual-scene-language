@@ -1,5 +1,5 @@
 /**
- * Jest configuration for @vsl/mcp-server package.
+ * Jest configuration for @thinkingos/vsl-mcp-server package.
  *
  * Uses ts-jest for TypeScript support with ESM modules.
  * ESM format (.js + "type": "module" in package.json) — no ts-node required.
@@ -12,6 +12,7 @@ const config = {
   extensionsToTreatAsEsm: ['.ts'],
   moduleNameMapper: {
     '^(\\.{1,2}/.*)\\.js$': '$1',
+    '^@thinkingos/vsl-sdk$': '<rootDir>/../../dist/index.mjs',
   },
   transform: {
     '^.+\\.tsx?$': [

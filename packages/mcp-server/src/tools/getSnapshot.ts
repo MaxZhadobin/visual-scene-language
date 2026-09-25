@@ -7,15 +7,17 @@
  *
  * Flow:
  *  1. Навигация по URL (если указан)
- *  2. Извлечение DOM-дерева через evaluate()
- *  3. Сегментация → VslDocument (через SDK)
- *  4. Сохранение в ServerSession
- *  5. Возврат VSL JSON
+ *  2. Извлечение DOM-дерева через evaluate() → ExtractedElement[]
+ *  3. Сегментация → VslDocument (через SDK: segmentTree → buildVslDocument)
+ *  4. Запись data-vsl-id атрибутов в DOM для execute_action
+ *  5. Сохранение в ServerSession
+ *  6. Возврат VSL JSON
  */
 
 import type { BrowserManager } from '../browser/manager.js';
 import type { ServerSession } from '../session/serverSession.js';
 import type { McpServerConfig } from '../config/loader.js';
+import { segmentTree, buildVslDocument, type VslDocument, type VslObject } from '@thinkingos/vsl-sdk';
 
 /** Аргументы vsl_get_snapshot. */
 export interface GetSnapshotArgs {
@@ -27,6 +29,163 @@ export interface GetSnapshotResult {
   status: 'success' | 'error';
   data?: unknown;
   error?: string;
+}
+
+/**
+ * Извлекает DOM-дерево в формате ExtractedElement[] (SDK-совместимый).
+ * Выполняется в браузерном контексте через Playwright evaluate().
+ */
+function extractDomTreeInBrowser(): unknown[] {
+  // Интерфейсы (копия из SDK для типизации в browser context)
+  interface Rect { x: number; y: number; width: number; height: number; }
+  interface ElementCss {
+    cursor?: string; position?: string; top?: string; bottom?: string;
+    display?: string; gap?: string; fontWeight?: string; fontSize?: string;
+    opacity?: string; pointerEvents?: string; overflow?: string; height?: string;
+  }
+  interface ExtractedElement {
+    tag: string; indexPath: number[]; rect: Rect; text: string | null;
+    attributes: Record<string, string>; css?: ElementCss; children: ExtractedElement[];
+  }
+
+  const NON_RENDERABLE_TAGS = new Set([
+    'script', 'style', 'link', 'meta', 'noscript', 'template', 'head', 'title', 'base',
+  ]);
+
+  function viewOf(el: Element): Window | null {
+    return el.ownerDocument.defaultView;
+  }
+
+  function isDisplayNone(el: Element): boolean {
+    return viewOf(el)?.getComputedStyle(el).display === 'none';
+  }
+
+  function isVisibilityHidden(el: Element): boolean {
+    return viewOf(el)?.getComputedStyle(el).visibility === 'hidden';
+  }
+
+  const TEXT_NODE_TYPE = 3;
+
+  function ownText(el: Element): string {
+    let raw = '';
+    for (const node of Array.from(el.childNodes)) {
+      if (node.nodeType === TEXT_NODE_TYPE) {
+        raw += node.textContent ?? '';
+      }
+    }
+    return raw.replace(/\s+/g, ' ').trim();
+  }
+
+  function extractAttributes(el: Element): Record<string, string> {
+    const attributes: Record<string, string> = {};
+    for (const attr of Array.from(el.attributes)) {
+      attributes[attr.name] = attr.value;
+    }
+    return attributes;
+  }
+
+  const CSS_PROPERTIES: Array<[keyof ElementCss, string]> = [
+    ['cursor', 'cursor'], ['position', 'position'], ['top', 'top'], ['bottom', 'bottom'],
+    ['display', 'display'], ['gap', 'gap'], ['fontWeight', 'font-weight'],
+    ['fontSize', 'font-size'], ['opacity', 'opacity'], ['pointerEvents', 'pointer-events'],
+    ['overflow', 'overflow'], ['height', 'height'],
+  ];
+
+  function captureCss(el: Element): ElementCss {
+    const view = viewOf(el);
+    if (view === null) return {};
+    const style = view.getComputedStyle(el);
+    const css: ElementCss = {};
+    for (const [key, property] of CSS_PROPERTIES) {
+      const value = style.getPropertyValue(property);
+      if (value !== '') css[key] = value;
+    }
+    return css;
+  }
+
+  function toRect(rect: DOMRect): Rect {
+    return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+  }
+
+  function hasZeroBox(rect: Rect): boolean {
+    return rect.width <= 0 || rect.height <= 0;
+  }
+
+  function collectVisibleChildren(parent: Element, parentPath: readonly number[]): ExtractedElement[] {
+    const result: ExtractedElement[] = [];
+    Array.from(parent.children).forEach((child, index) => {
+      const path = [...parentPath, index];
+      const tag = child.tagName.toLowerCase();
+
+      if (NON_RENDERABLE_TAGS.has(tag) || isDisplayNone(child)) {
+        return;
+      }
+
+      const rect = toRect(child.getBoundingClientRect());
+
+      if (isVisibilityHidden(child) || hasZeroBox(rect)) {
+        result.push(...collectVisibleChildren(child, path));
+        return;
+      }
+
+      result.push({
+        tag,
+        indexPath: path,
+        rect,
+        text: ownText(child) || null,
+        attributes: extractAttributes(child),
+        css: captureCss(child),
+        children: collectVisibleChildren(child, path),
+      });
+    });
+    return result;
+  }
+
+  const body = document.body;
+  if (!body) return [];
+  return collectVisibleChildren(body, []);
+}
+
+/**
+ * Записывает VSL ID обратно в DOM через data-vsl-id атрибуты.
+ * Выполняется в браузерном контексте через Playwright evaluate().
+ */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+function writeVslIdsToDom(objects: readonly VslObject[]): void {
+  function visit(obj: VslObject): void {
+    // ID формат: tag_indexPath (например, button_0_0)
+    // indexPath можно восстановить из ID, но проще искать по tag + позиции
+    // Используем CSS selector с data-vsl-id для точного соответствия
+    const parts = obj.id.split('_');
+    if (parts.length < 2) return;
+    
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const tag = parts[0];
+    const indexPath = parts.slice(1).map(Number);
+    
+    // Находим элемент по indexPath
+    let current: Element | null = document.body;
+    for (const idx of indexPath) {
+      if (!current) break;
+      const elementChildren = Array.from(current.children);
+      current = elementChildren[idx] || null;
+    }
+    
+    if (current) {
+      current.setAttribute('data-vsl-id', obj.id);
+    }
+    
+    // Рекурсия для детей
+    if (obj.ch) {
+      for (const child of obj.ch) {
+        visit(child);
+      }
+    }
+  }
+  
+  for (const obj of objects) {
+    visit(obj);
+  }
 }
 
 /**
@@ -60,76 +219,58 @@ export async function handleGetSnapshot(
       };
     }
 
-    // 3. Извлекаем DOM-дерево через evaluate()
-    //    Используем SDK: extractDomTree (запускается в контексте страницы)
-    const domTree = await browser.evaluate(() => {
-      // Эта функция выполняется в браузере
-      // Возвращаем упрощённое DOM-дерево для VSL
-      const extractElement = (el: Element): Record<string, unknown> => {
-        const rect = el.getBoundingClientRect();
-        const computedStyle = window.getComputedStyle(el);
+    // 3. Извлекаем DOM-дерево в формате ExtractedElement[] (SDK-совместимый)
+    const extractedElements = await browser.evaluate(extractDomTreeInBrowser);
 
-        return {
-          tag: el.tagName.toLowerCase(),
-          id: el.id || undefined,
-          className: el.className || undefined,
-          text: el.textContent?.trim().substring(0, 100) || undefined,
-          rect: {
-            x: rect.x,
-            y: rect.y,
-            width: rect.width,
-            height: rect.height,
-          },
-          role: el.getAttribute('role') || undefined,
-          ariaLabel: el.getAttribute('aria-label') || undefined,
-          ariaHidden: el.getAttribute('aria-hidden') || undefined,
-          display: computedStyle.display,
-          visibility: computedStyle.visibility,
-          children: Array.from(el.children)
-            .filter((child) => {
-              const style = window.getComputedStyle(child);
-              return style.display !== 'none' && style.visibility !== 'hidden';
-            })
-            .map(extractElement),
-        };
-      };
+    // 4. Получаем viewport размеры
+    const viewport = await browser.evaluate(() => ({
+      width: window.innerWidth,
+      height: window.innerHeight,
+    }));
 
-      return extractElement(document.documentElement);
+    // 5. Сегментация и построение VSL через SDK
+    const segmentedElements = segmentTree(extractedElements as never);
+    const vslDocument: VslDocument = buildVslDocument(segmentedElements, {
+      viewport: viewport as { width: number; height: number },
+      url: args.url || (await browser.evaluate(() => window.location.href)) as string,
+      timestamp: new Date().toISOString(),
     });
 
-    // 4. TODO: Вызвать SDK функции для сегментации и построения VslDocument
-    //    extractDomTree → segmentTree → buildVslDocument
-    //    Пока возвращаем сырое DOM-дерево как placeholder
-
-    const vslDocument = {
-      vsl_version: '1.0.0',
-      canvas: {
-        viewport: {
-          width: (domTree as Record<string, unknown>).rect
-            ? ((domTree as Record<string, unknown>).rect as Record<string, number>).width
-            : 1280,
-          height: (domTree as Record<string, unknown>).rect
-            ? ((domTree as Record<string, unknown>).rect as Record<string, number>).height
-            : 800,
-          unit: 'px',
-        },
-        background: '#ffffff',
-        scale: 1,
-        orientation: 'landscape',
-        timestamp: new Date().toISOString(),
+    // 6. Записываем VSL ID обратно в DOM для execute_action
+    await browser.evaluate(
+      (objects: VslObject[]) => {
+        function visit(obj: VslObject): void {
+          const parts = obj.id.split('_');
+          if (parts.length < 2) return;
+          
+          const indexPath = parts.slice(1).map(Number);
+          
+          let current: Element | null = document.body;
+          for (const idx of indexPath) {
+            if (!current) break;
+            const elementChildren = Array.from(current.children);
+            current = elementChildren[idx] || null;
+          }
+          
+          if (current) {
+            current.setAttribute('data-vsl-id', obj.id);
+          }
+          
+          if (obj.ch) {
+            for (const child of obj.ch) {
+              visit(child);
+            }
+          }
+        }
+        
+        for (const obj of objects) {
+          visit(obj);
+        }
       },
-      objects: [
-        {
-          id: 'root_0',
-          t: 'container',
-          p: [0, 0],
-          s: [1280, 800],
-          raw_dom: domTree,
-        },
-      ],
-    };
+      vslDocument.objects,
+    );
 
-    // 5. Сохраняем в ServerSession
+    // 7. Сохраняем в ServerSession
     session.setSnapshot(vslDocument as never);
 
     return {
