@@ -1,15 +1,20 @@
 /**
  * Tool: vsl_navigate (T1.6.3).
  *
- * Переходит по URL. Загружает новую страницу и возвращает успех/неудачу.
+ * Переходит по URL. Загружает новую страницу и возвращает snapshot.
  *
  * Flow:
  *  1. Валидация URL
  *  2. Навигация через BrowserManager
- *  3. Возврат результата
+ *  3. Извлечение snapshot из новой страницы
+ *  4. Возврат результата с snapshot
  */
 
+import { computeToolMetrics } from '../utils/metrics.js';
 import type { BrowserManager } from '../browser/manager.js';
+import type { ServerSession } from '../session/serverSession.js';
+import { extractDomTreeInBrowser } from './getSnapshot.js';
+import type { SnapshotInput } from '@thinkingos/vsl-sdk';
 
 /** Аргументы vsl_navigate. */
 export interface NavigateArgs {
@@ -19,8 +24,10 @@ export interface NavigateArgs {
 /** Результат vsl_navigate. */
 export interface NavigateResult {
   status: 'success' | 'error';
-  data?: { url: string; title?: string };
+  data?: { url: string; title?: string; snapshot?: unknown };
   error?: string;
+  /** Метрики производительности (DEC-029). */
+  metadata?: { json_size_bytes: number; estimated_tokens: number; execution_time_ms: number; timestamp: string };
 }
 
 /**
@@ -28,11 +35,15 @@ export interface NavigateResult {
  *
  * @param args - Аргументы инструмента (url обязателен)
  * @param browser - Browser Manager
+ * @param session - Server Session для сохранения snapshot
  */
 export async function handleNavigate(
   args: NavigateArgs,
   browser: BrowserManager,
+  session: ServerSession,
 ): Promise<NavigateResult> {
+  const startTime = Date.now();
+
   try {
     // 1. Валидация URL
     if (!args.url || typeof args.url !== 'string') {
@@ -68,12 +79,36 @@ export async function handleNavigate(
     // 4. Получаем title страницы
     const title = await browser.evaluate(() => document.title);
 
-    return {
-      status: 'success',
-      data: {
+    // 5. Извлекаем snapshot новой страницы
+    let snapshot: unknown;
+    try {
+      const elements = await browser.evaluate(extractDomTreeInBrowser);
+      const viewport = await browser.evaluate(() => ({
+        width: window.innerWidth,
+        height: window.innerHeight,
+      }));
+      const input: SnapshotInput = {
+        viewport: viewport as { width: number; height: number },
         url: args.url,
         title: title as string,
-      },
+        timestamp: new Date().toISOString(),
+      };
+      session.snapshotFromElements(elements as unknown[], input);
+      snapshot = session.getSnapshot();
+    } catch {
+      // Snapshot extraction is best-effort
+    }
+
+    const data = {
+      url: args.url,
+      title: title as string,
+      snapshot,
+    };
+
+    return {
+      status: 'success',
+      data,
+      metadata: computeToolMetrics(data, startTime),
     };
   } catch (error) {
     return {

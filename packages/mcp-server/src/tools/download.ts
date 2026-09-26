@@ -65,6 +65,35 @@ export async function handleDownload(
       };
     }
 
+    // Валидация типов параметров (DEC-030)
+    if (args.target_id !== undefined && typeof args.target_id !== 'string') {
+      return {
+        status: 'error',
+        error: 'target_id must be a string',
+      };
+    }
+
+    if (args.value !== undefined && typeof args.value !== 'string') {
+      return {
+        status: 'error',
+        error: 'value must be a string',
+      };
+    }
+
+    if (args.timeout !== undefined && (typeof args.timeout !== 'number' || args.timeout <= 0)) {
+      return {
+        status: 'error',
+        error: 'timeout must be a positive number (milliseconds)',
+      };
+    }
+
+    if (args.save_path !== undefined && typeof args.save_path !== 'string') {
+      return {
+        status: 'error',
+        error: 'save_path must be a string',
+      };
+    }
+
     // 2. Проверяем, что есть snapshot (для target_id)
     if (args.target_id && !session.hasSnapshot()) {
       return {
@@ -155,6 +184,12 @@ export async function handleDownload(
 
     // Берём последнюю загрузку (самую новую)
     const latestDownload = downloads[downloads.length - 1];
+    if (!latestDownload) {
+      return {
+        status: 'error',
+        error: 'No active downloads found after triggering download.',
+      };
+    }
     const downloadId = latestDownload.downloadId;
 
     // Ожидаем завершения загрузки

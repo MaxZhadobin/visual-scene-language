@@ -23,8 +23,7 @@ import {
 import { loadConfig } from './config/loader.js';
 import { registerTools } from './tools/index.js';
 import { registerResources } from './resources/index.js';
-import { BrowserManager } from './browser/manager.js';
-import { ServerSession } from './session/serverSession.js';
+import { SessionManager } from './session/sessionManager.js';
 import { VSL_MCP_SERVER_VERSION } from './version.js';
 
 /**
@@ -41,9 +40,11 @@ async function main(): Promise<void> {
   // 1. Загрузка конфигурации
   const config = loadConfig();
 
-  // 2. Создание shared singleton'ов
-  const browser = new BrowserManager(config.browser);
-  const session = new ServerSession();
+  // 2. Создание SessionManager для per-session isolation
+  // Каждая сессия (агент) получает свой BrowserManager и ServerSession
+  // Default session ID из env VSL_SESSION_ID (fallback: 'default')
+  const defaultSessionId = process.env.VSL_SESSION_ID || 'default';
+  const sessionManager = new SessionManager(config.browser, { defaultSessionId });
 
   // 3. Создание MCP Server
   const server = new Server(
@@ -59,9 +60,9 @@ async function main(): Promise<void> {
     },
   );
 
-  // 4. Регистрация handlers (передаём shared browser и session)
-  registerTools(server, config, browser, session);
-  registerResources(server, config, session);
+  // 4. Регистрация handlers (передаём sessionManager для per-session routing)
+  registerTools(server, config, sessionManager);
+  registerResources(server, config, sessionManager);
 
   // 5. Подключение транспорта
   const transport = new StdioServerTransport();
@@ -70,6 +71,18 @@ async function main(): Promise<void> {
   // 6. Логирование запуска (в stderr, чтобы не мешать JSON-RPC в stdout)
   console.error(`[VSL MCP Server] v${VSL_MCP_SERVER_VERSION} started (stdio transport)`);
   console.error(`[VSL MCP Server] Config: vision=${config.vision.provider}, model=${config.vision.model}`);
+  console.error(`[VSL MCP Server] Per-session isolation enabled`);
+  console.error(`[VSL MCP Server] Default session ID: ${defaultSessionId}`);
+
+  // 7. Graceful shutdown — закрываем все сессии при завершении
+  const shutdown = async () => {
+    console.error('[VSL MCP Server] Shutting down...');
+    await sessionManager.closeAll();
+    process.exit(0);
+  };
+
+  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
 }
 
 // Запуск сервера

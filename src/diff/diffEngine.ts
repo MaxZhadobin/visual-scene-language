@@ -96,7 +96,12 @@ function objectsEqual(a: VslObject, b: VslObject): boolean {
   );
 }
 
-function tuple2Equal(a: [number, number], b: [number, number]): boolean {
+function tuple2Equal(
+  a: [number, number] | null | undefined,
+  b: [number, number] | null | undefined,
+): boolean {
+  if (a === null || a === undefined) return b === null || b === undefined;
+  if (b === null || b === undefined) return false;
   return a[0] === b[0] && a[1] === b[1];
 }
 

@@ -11,6 +11,7 @@
  *  3. Если нет — вернуть ошибку с инструкцией вызвать vsl_get_snapshot
  */
 
+import { computeToolMetrics } from '../utils/metrics.js';
 import type { ServerSession } from '../session/serverSession.js';
 
 /** Аргументы vsl_get_full_json (нет параметров). */
@@ -22,6 +23,8 @@ export interface GetFullJsonResult {
   data?: unknown;
   error?: string;
   hint?: string;
+  /** Метрики производительности (DEC-029). */
+  metadata?: { json_size_bytes: number; estimated_tokens: number; execution_time_ms: number; timestamp: string };
 }
 
 /**
@@ -33,6 +36,8 @@ export async function handleGetFullJson(
   _args: GetFullJsonArgs,
   session: ServerSession,
 ): Promise<GetFullJsonResult> {
+  const startTime = Date.now();
+
   try {
     // Проверяем наличие snapshot
     if (!session.hasSnapshot()) {
@@ -49,6 +54,7 @@ export async function handleGetFullJson(
     return {
       status: 'success',
       data: snapshot,
+      metadata: computeToolMetrics(snapshot, startTime),
     };
   } catch (error) {
     return {

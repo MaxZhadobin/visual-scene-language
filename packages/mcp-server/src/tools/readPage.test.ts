@@ -249,7 +249,7 @@ describe('vsl_read_page', () => {
     expect(mockSession.setSnapshot).toHaveBeenCalled();
   });
 
-  it('обрабатывает исключения из browser.evaluate()', async () => {
+  it('использует fallback DOM при исключении из browser.evaluate()', async () => {
     mockBrowser.isAvailable.mockResolvedValue(true);
     mockBrowser.getContent.mockResolvedValue('<html></html>');
     mockBrowser.evaluate.mockRejectedValue(new Error('Page context destroyed'));
@@ -261,9 +261,9 @@ describe('vsl_read_page', () => {
       mockConfig,
     );
 
-    expect(result.status).toBe('error');
-    expect(result.error).toContain('Page context destroyed');
-    expect(result.error).toContain('vsl_read_page failed');
+    // extractVslFromPage перехватывает ошибку и использует fallback DOM
+    expect(result.status).toBe('success');
+    expect(result.data?.vslDocument).toBeDefined();
   });
 
   it('обрабатывает не-Error исключения (fallback на render)', async () => {

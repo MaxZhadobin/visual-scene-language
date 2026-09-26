@@ -21,7 +21,7 @@
 import type { ElementCss, ExtractedElement, Rect } from '../capture/domExtractor';
 import type { VslFragmentMeta, VslState, VslType } from '../types/vsl';
 import { resolveLevel1Type } from './level1';
-import { resolveAriaRoleType, resolveSt } from './level2';
+import { resolveAriaRoleType, resolveDropdownToggle, resolveSt } from './level2';
 import { isPointerInvisible, resolveLevel3Type } from './level3';
 import { resolveLevel4Type } from './level4';
 
@@ -63,7 +63,8 @@ function segmentOne(el: ExtractedElement): SegmentedElement {
     attributes,
     t: isFileInput
       ? 'file_input'
-      : (resolveLevel1Type(el.tag) ??
+      : (resolveDropdownToggle(attributes) ??
+         resolveLevel1Type(el.tag) ??
          resolveAriaRoleType(attributes['role']) ??
          resolveLevel3Type(el.css, attributes)),
     txt: attributes['aria-label'] ?? el.text,

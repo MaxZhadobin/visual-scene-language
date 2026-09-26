@@ -21,8 +21,7 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 
 import type { McpServerConfig } from '../config/loader.js';
-import { BrowserManager } from '../browser/manager.js';
-import { ServerSession } from '../session/serverSession.js';
+import type { SessionManager } from '../session/sessionManager.js';
 import { handleGetSnapshot } from './getSnapshot.js';
 import { handleGetDiff } from './getDiff.js';
 import { handleNavigate } from './navigate.js';
@@ -38,13 +37,22 @@ import { handleDownload } from './download.js';
 const VSL_TOOLS = [
   {
     name: 'vsl_get_snapshot',
-    description: 'Получить текущий VSL snapshot страницы. Возвращает VSL JSON с семантической структурой элементов. VSL (Visual Scene Language) — это JSON-представление страницы, где каждый элемент имеет: id (уникальный идентификатор, например btn_123), type (button/input/link/text/image), text (текстовое содержимое), bbox ([x,y,width,height]), children (вложенные элементы). Пример: { viewport:{width:1920,height:1080}, objects:[{id:btn_1,type:button,text:Войти,bbox:[100,200,80,30]},{id:inp_2,type:input,text:,bbox:[100,250,200,30]}] }. Использование: получите snapshot, найдите нужный элемент по id, затем используйте vsl_execute_action для взаимодействия.',
+    description: 'Получить текущий VSL snapshot страницы. Возвращает VSL JSON с семантической структурой элементов. VSL (Visual Scene Language) — это JSON-представление страницы, где каждый элемент имеет: id (уникальный идентификатор, например btn_123), type (button/input/link/text/image), text (текстовое содержимое), bbox ([x,y,width,height]), children (вложенные элементы). Пример: { viewport:{width:1920,height:1080}, objects:[{id:btn_1,type:button,text:Войти,bbox:[100,200,80,30]},{id:inp_2,type:input,text:,bbox:[100,250,200,30]}] }. Использование: получите snapshot, найдите нужный элемент по id, затем используйте vsl_execute_action для взаимодействия. Lazy text loading (DEC-026): тексты длиннее 200 символов автоматически заменяются на txt_preview (первые ~50 символов) + txt_ref (ссылка вида tb_001). Полные тексты хранятся в text_blocks map. Для получения полного текста используйте vsl_get_text_block. Параметры: detail_level (low/medium/high) для фильтрации объектов, ttl (мс) для кэширования.',
     inputSchema: {
       type: 'object',
       properties: {
         url: {
           type: 'string',
           description: 'URL страницы (опционально, если не указан — используется текущая страница)',
+        },
+        detail_level: {
+          type: 'string',
+          enum: ['low', 'medium', 'high'],
+          description: "Уровень детализации snapshot. 'low': только интерактивные элементы (кнопки, ссылки, инпуты). 'medium': интерактивные + контейнеры. 'high': все объекты (полный DOM). Default: 'high'.",
+        },
+        ttl: {
+          type: 'number',
+          description: 'TTL кэша в миллисекундах (default: 5000 = 5s). Установите 0 для отключения кэширования.',
         },
       },
     },
@@ -59,7 +67,7 @@ const VSL_TOOLS = [
   },
   {
     name: 'vsl_execute_action',
-    description: 'Выполнить действие над элементом VSL. Найдите элемент по id в snapshot (vsl_get_snapshot), затем вызовите это действие. Поддерживаемые действия: click (клик по элементу), type (ввод текста, требует value), fill (алиас type, ввод текста, требует value), scroll (прокрутка), select (выбор опции, требует value), hover, focus, blur, check, uncheck, press (нажатие клавиши), upload (загрузка файла, требует value — путь к файлу или список путей через запятую). Пример: {action:click, target_id:btn_1} или {action:type, target_id:inp_2, value:hello@mail.com} или {action:fill, target_id:inp_2, value:hello@mail.com} или {action:upload, target_id:file_input_0, value:/path/to/file.pdf}.',
+    description: 'Выполнить действие над элементом VSL. Найдите элемент по id в snapshot (vsl_get_snapshot), затем вызовите это действие. Поддерживаемые действия: click (клик по элементу), type (ввод текста, требует value), fill (алиас type, ввод текста, требует value), scroll (прокрутка), select (выбор опции, требует value), hover, focus, blur, check, uncheck, press (нажатие клавиши), upload (загрузка файла, требует value — путь к файлу или список путей через запятую). Пример: {action:click, target_id:btn_1} или {action:type, target_id:inp_2, value:hello@mail.com} или {action:fill, target_id:inp_2, value:hello@mail.com} или {action:upload, target_id:file_input_0, value:/path/to/file.pdf}. Параметр return_state=true возвращает diff и snapshot после действия.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -74,6 +82,10 @@ const VSL_TOOLS = [
         value: {
           type: 'string',
           description: 'Значение для действия (например, текст для type/fill, опция для select)',
+        },
+        return_state: {
+          type: 'boolean',
+          description: 'Если true, возвращает diff и snapshot после действия. Полезно для отслеживания изменений DOM без дополнительного вызова vsl_get_diff. Default: true — всегда возвращать состояние для экономии ходов агента. Установите false для отключения.',
         },
       },
       required: ['action', 'target_id'],
@@ -103,7 +115,7 @@ const VSL_TOOLS = [
   },
   {
     name: 'vsl_get_visual',
-    description: 'Получить visual fragment (скриншот) элемента в формате base64 WebP. Используйте для элементов, которые сложно классифицировать по тексту (иконки, графики, кастомные виджеты). Возвращает {mediaType:image/webp, data:base64data}. Пример: {element_id: img_5}.',
+    description: 'Получить visual fragment (скриншот) элемента в формате base64 WebP. Используйте для элементов, которые сложно классифицировать по тексту (иконки, графики, кастомные виджеты). Возвращает {mediaType:image/webp, data:base64data}. Пример: {element_id: img_5}. Параметр auto_refresh=true автоматически обновляет snapshot перед поиском элемента.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -111,24 +123,23 @@ const VSL_TOOLS = [
           type: 'string',
           description: 'ID элемента в VSL JSON',
         },
+        auto_refresh: {
+          type: 'boolean',
+          description: 'Если true, автоматически обновляет snapshot перед поиском элемента. Полезно после навигации или действий, которые изменяют DOM. Default: false.',
+        },
       },
       required: ['element_id'],
     },
   },
   {
     name: 'vsl_read_page',
-    description: 'Гибридное чтение веб-страниц. mode=auto (по умолчанию): статические страницы читаются через HTTP (быстро), SPA рендерятся через браузер. mode=http: только HTTP (без браузера). mode=render: всегда рендерить через браузер. readable=true: фильтрует шум (навигация, футеры, cookie-баннеры) для чистого контента. При повторных вызовах возвращает diff (изменения), а не полный контент. Пример: {url:https://example.com, mode:auto, readable:true}.',
+    description: 'Чтение веб-страниц. Автоматически определяет стратегию: статические страницы читаются через HTTP (быстро), SPA рендерятся через браузер. readable=true фильтрует шум (навигация, футеры, cookie-баннеры) для чистого контента. При повторных вызовах возвращает diff (изменения), а не полный контент. Параметр detail_level (low/medium/high) фильтрует объекты в snapshot: low — только интерактивные элементы (кнопки, ссылки, инпуты), medium — интерактивные + контейнеры (по умолчанию), high — все объекты. В metadata возвращается vsl_estimated_tokens — количество токенов в VSL snapshot для оценки контекста. Пример: {url:"https://example.com", readable:true, detail_level:"medium"}. Возвращает snapshot и diff автоматически.',
     inputSchema: {
       type: 'object',
       properties: {
         url: {
           type: 'string',
           description: 'URL страницы для чтения',
-        },
-        mode: {
-          type: 'string',
-          enum: ['auto', 'http', 'render'],
-          description: 'Режим чтения: auto (авто-детект), http (только HTTP), render (всегда рендерить)',
         },
         readable: {
           type: 'boolean',
@@ -192,11 +203,9 @@ const VSL_TOOLS = [
  *
  * @param server - MCP Server instance
  * @param config - Конфигурация сервера
- * @param browser - Browser Manager (shared singleton)
- * @param session - Server Session (shared singleton)
+ * @param sessionManager - Session Manager для per-session isolation
  */
-export function registerTools(server: Server, config: McpServerConfig, browser: BrowserManager, session: ServerSession): void {
-
+export function registerTools(server: Server, config: McpServerConfig, sessionManager: SessionManager): void {
   // Handler: список инструментов
   server.setRequestHandler(ListToolsRequestSchema, async () => {
     return {
@@ -206,7 +215,12 @@ export function registerTools(server: Server, config: McpServerConfig, browser: 
 
   // Handler: вызов инструмента
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
-    const { name, arguments: args } = request.params;
+    const { name, arguments: args, _meta } = request.params as { name: string; arguments?: Record<string, unknown>; _meta?: { sessionId?: string } };
+
+    // Per-session isolation: извлекаем sessionId из _meta или используем default из env VSL_SESSION_ID
+    const sessionId = _meta?.sessionId ?? sessionManager.getDefaultSessionId();
+    const { browser, session } = sessionManager.getSession(sessionId);
+
 
     try {
       let result: unknown;
@@ -225,7 +239,7 @@ export function registerTools(server: Server, config: McpServerConfig, browser: 
           break;
 
         case 'vsl_navigate':
-          result = await handleNavigate(args as never, browser);
+          result = await handleNavigate(args as never, browser, session);
           break;
 
         case 'vsl_clear_cache':
@@ -233,7 +247,8 @@ export function registerTools(server: Server, config: McpServerConfig, browser: 
           break;
 
         case 'vsl_get_visual':
-          result = await handleGetVisual(args as never, browser);
+          // vsl_get_visual returns MCP-compliant ImageContent directly
+          result = await handleGetVisual(args as never, browser, session);
           break;
 
         case 'vsl_read_page':

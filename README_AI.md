@@ -509,23 +509,49 @@ MCP (Model Context Protocol) Server — рекомендуемый способ 
 }
 ```
 
-**MCP Tools (12 инструментов):**
+**MCP Tools (10 инструментов):**
 
 | Tool | Описание |
 |------|----------|
-| `vsl_get_snapshot` | Получить полный VSL snapshot текущего экрана |
-| `vsl_get_diff` | Получить только изменения с последнего snapshot |
-| `vsl_execute_action` | Выполнить действие (click, type, scroll, navigate). Lazy Navigation (DEC-028): автоматически навигирует браузер на URL из snapshot, если текущий URL отличается |
-| `vsl_find_element` | Найти элемент по тексту, роли или CSS-селектору |
-| `vsl_cache_clear` | Очистить кэш snapshots |
-| `vsl_cache_invalidate` | Invalidating конкретного элемента или селектора |
-| `vsl_navigate` | Navigate to URL |
-| `vsl_wait_for` | Ожидание появления элемента (selector, timeout) |
-| `vsl_get_visual_fragment` | Получить визуальный фрагмент (Base64 WebP) по ID |
-| `vsl_get_text_block` | Получить полный текст по txt_ref (lazy text loading, M1.7) |
-| `vsl_read_page` | Прочитать веб-страницу с автоматической стратегией: HTTP-first для статики, автопереключение на Render для SPA (M1.6, DEC-024) |
-| `vsl_download` | Управление загрузкой файлов: клик по элементу или прямое скачивание по URL, ожидание завершения, сохранение в save_path (M1.5) |
-| `vsl_decide` | Отправить VSL JSON в LLM и получить рекомендуемое действие |
+| `vsl_get_snapshot` | Получить VSL snapshot текущего экрана. Параметры: `url` (опционально), `detail_level` (low/medium/high, default: high), `ttl` (кэш в мс, default: 5000). Поддерживает lazy text loading (DEC-026): длинные тексты >200 символов заменяются на `txt_preview` + `txt_ref`, полные тексты в `text_blocks`. Возвращает метрики: `json_size_bytes`, `estimated_tokens`, `object_count`, `execution_time_ms` |
+| `vsl_get_diff` | Получить только изменения с последнего snapshot. Возвращает метрики производительности |
+| `vsl_execute_action` | Выполнить действие (click, type, scroll, navigate, и др.). Lazy Navigation (DEC-028): автоматически навигирует браузер на URL из snapshot. **Автоматическое создание snapshot**: если в DOM нет атрибутов `data-vsl-id` (например, после `vsl_read_page`), автоматически создаёт snapshot для инжекта атрибутов — не нужно вручную вызывать `vsl_get_snapshot` перед действием. Параметр `return_state: true` возвращает **diff И полный snapshot** после действия (удобно для отслеживания изменений). Валидация input параметров (DEC-030) |
+| `vsl_cache_clear` | Очистить кэш snapshots. Возвращает метрики производительности |
+| `vsl_navigate` | Navigate to URL. Возвращает метрики производительности |
+| `vsl_get_visual` | Получить визуальный фрагмент (Base64 WebP) по ID элемента. Параметр `auto_refresh: true` автоматически обновляет snapshot перед поиском (решает проблему устаревших data-vsl-id). **Автоскролл**: параметр `auto_scroll` (default: `true`) — автоматически прокручивает страницу к элементу если он вне viewport, использует `scrollIntoView({ block: 'center', inline: 'center' })`. Возвращает `scroll_info: { scrolled, scroll_offset }` если был выполнен автоскролл. Улучшенная обработка ошибок с `possible_causes` и `suggestions` |
+| `vsl_get_text_block` | Получить полный текст по `txt_ref` из lazy text loading (M1.7, DEC-026). Используется когда текст >200 символов заменён на `txt_preview` + `txt_ref` в snapshot |
+| `vsl_read_page` | Прочитать веб-страницу с автоматической стратегией: HTTP-first для статики, автопереключение на Render для SPA (M1.6, DEC-024). Валидация input параметров |
+| `vsl_download` | Управление загрузкой файлов: клик по элементу (`target_id`) или прямое скачивание по URL (`value`), ожидание завершения, сохранение в `save_path` (M1.5). Валидация input параметров |
+| `vsl_get_full_json` | Получить полный VSL JSON текущей страницы (без diff-first логики). Возвращает метрики производительности |
+
+**Per-Session Isolation (Multi-Agent Support):**
+
+MCP Server поддерживает **per-session isolation** — каждый AI-агент (или клиент) получает изолированную сессию с собственным браузером, кэшем и состоянием snapshot. Это решает проблему разделения состояния при одновременной работе нескольких агентов.
+
+- **SessionManager** управляет сессиями: `Map<sessionId, SessionContext>`, где каждая сессия имеет свой `BrowserManager` и `ServerSession`
+- **Routing**: каждый tool call извлекает `sessionId` из `_meta.sessionId` (fallback: `'default'`)
+- **Cleanup**: неактивные сессии автоматически удаляются по TTL (default: 5 минут)
+- **Graceful shutdown**: `closeAll()` закрывает все браузеры при остановке сервера
+
+Пример конфигурации для нескольких агентов:
+
+
+{
+  "mcpServers": {
+    "vsl-agent-1": {
+      "command": "npx",
+      "args": ["@thinkingos/vsl-mcp-server"],
+      "env": { "VSL_SESSION_ID": "agent-1" }
+    },
+    "vsl-agent-2": {
+      "command": "npx",
+      "args": ["@thinkingos/vsl-mcp-server"],
+      "env": { "VSL_SESSION_ID": "agent-2" }
+    }
+  }
+}
+
+Каждый агент работает с изолированным браузером и состоянием, не влияя на другие сессии.
 **Поток взаимодействия:**
 
 ```

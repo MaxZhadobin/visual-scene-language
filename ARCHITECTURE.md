@@ -127,6 +127,7 @@ ARCHITECTURE.md описывает архитектуру системы VSL —
 | `<img>` | `image` | Logos, photos, icons |
 | `<select>` | `select` | Dropdown lists |
 | `<textarea>` | `textarea` | Multi-line input |
+| `<button aria-haspopup="menu">` | `dropdown_toggle` | Dropdown menu toggle |
 
 **Уровень 2: ARIA-атрибуты (бесплатно, ещё ~20% элементов)**
 
@@ -141,6 +142,7 @@ ARCHITECTURE.md описывает архитектуру системы VSL —
 | `aria-expanded="true"` | `st: "expanded"` | `<div aria-expanded="true">` |
 | `aria-disabled="true"` | `st: "disabled"` | `<button aria-disabled="true">` |
 | `aria-hidden="true"` | пропустить | Декоративные элементы |
+| `aria-haspopup="menu"` | `t: "dropdown_toggle"` | `<button aria-haspopup="menu">` |
 
 **Уровень 3: CSS-анализ (10–50ms, ещё ~25% элементов)**
 

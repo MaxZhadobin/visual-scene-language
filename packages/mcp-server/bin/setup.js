@@ -6,10 +6,8 @@
  * Бесшовная установка:
  *  1. Проверка Node.js >= 18
  *  2. Проверка/установка Playwright (chromium)
- *  3. Настройка API ключей для vision-backend (OpenAI / Anthropic / Custom)
- *  4. Валидация API ключа (тестовый запрос)
- *  5. Сохранение конфигурации в ~/.vsl/config.json
- *  6. Вывод инструкций для подключения к агенту
+ *  3. Сохранение конфигурации в ~/.vsl/config.json
+ *  4. Вывод инструкций для подключения к агенту
  *
  * Usage:
  *  # Из корня monorepo:
@@ -17,6 +15,7 @@
  *  # Из директории packages/mcp-server:
  *  npm run setup
  */
+
 
 import { createInterface } from 'readline';
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'fs';
@@ -62,10 +61,6 @@ async function askYesNo(question, defaultAnswer = 'y') {
   return answer.toLowerCase().startsWith('y');
 }
 
-async function askOptional(question) {
-  const answer = await ask(`${question} ${C.dim}(оставьте пустым, чтобы пропустить)${C.reset}: `);
-  return answer || null;
-}
 
 // ─── Step 1: Node.js version check ───────────────────────────────────────────
 
@@ -162,160 +157,6 @@ async function setupPlaywright() {
   return true;
 }
 
-// ─── Step 3: API config ──────────────────────────────────────────────────────
-
-async function setupApiConfig() {
-  step(3, 'Настройка vision-backend (API ключи)');
-
-  log('   Vision-backend использует мультимодальные модели для классификации элементов.');
-  log('   Поддерживаются: OpenAI, Anthropic, или любой OpenAI-compatible провайдер.\n');
-
-  log('  1. OpenAI (gpt-6-luna)');
-  log('  2. Anthropic (claude-haiku-4-5)');
-  log('  3. Custom (любой OpenAI-compatible endpoint)');
-  const choice = await ask('\nВаш выбор (1-3): ');
-
-  let provider, apiKey, model, baseUrl;
-
-  if (choice === '1') {
-    provider = 'openai';
-    model = 'gpt-6-luna';
-    apiKey = await askOptional('🔑 OpenAI API Key (sk-...)');
-    if (!apiKey) {
-      // Проверяем env
-      if (process.env.OPENAI_API_KEY) {
-        apiKey = process.env.OPENAI_API_KEY;
-        ok('Использую OPENAI_API_KEY из окружения');
-      } else {
-        warn('API ключ не указан. Vision-backend не будет работать.');
-        return null;
-      }
-    }
-  } else if (choice === '2') {
-    provider = 'anthropic';
-    model = 'claude-haiku-4-5';
-    apiKey = await askOptional('🔑 Anthropic API Key (sk-ant-...)');
-    if (!apiKey) {
-      if (process.env.ANTHROPIC_API_KEY) {
-        apiKey = process.env.ANTHROPIC_API_KEY;
-        ok('Использую ANTHROPIC_API_KEY из окружения');
-      } else {
-        warn('API ключ не указан. Vision-backend не будет работать.');
-        return null;
-      }
-    }
-  } else if (choice === '3') {
-    provider = 'custom';
-    baseUrl = await ask('🌐 Base URL (например, https://api.together.xyz/v1): ');
-    if (!baseUrl) {
-      fail('Base URL обязателен для custom провайдера');
-      return null;
-    }
-    apiKey = await ask('🔑 API Key: ');
-    if (!apiKey) {
-      fail('API Key обязателен для custom провайдера');
-      return null;
-    }
-    model = await ask('🤖 Model name (например, qwen-vl-plus): ');
-    if (!model) {
-      fail('Model name обязателен для custom провайдера');
-      return null;
-    }
-  } else {
-    fail('Неверный выбор');
-    return null;
-  }
-
-  return { provider, apiKey, model, baseUrl };
-}
-
-// ─── Step 4: API validation ──────────────────────────────────────────────────
-
-async function validateApiKey(config) {
-  step(4, 'Валидация API ключа');
-
-  if (!config || !config.apiKey) {
-    warn('Пропускаю валидацию — нет API ключа');
-    return true;
-  }
-
-  info('Отправляю тестовый запрос...');
-
-  try {
-    let url, headers, body;
-
-    if (config.provider === 'anthropic') {
-      url = 'https://api.anthropic.com/v1/messages';
-      headers = {
-        'Content-Type': 'application/json',
-        'x-api-key': config.apiKey,
-        'anthropic-version': '2023-06-01',
-      };
-      body = JSON.stringify({
-        model: config.model,
-        max_tokens: 1,
-        messages: [{ role: 'user', content: 'hi' }],
-      });
-    } else {
-      // OpenAI или custom (OpenAI-compatible)
-      url = config.provider === 'custom'
-        ? `${config.baseUrl.replace(/\/$/, '')}/chat/completions`
-        : 'https://api.openai.com/v1/chat/completions';
-      headers = {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${config.apiKey}`,
-      };
-      body = JSON.stringify({
-        model: config.model,
-        max_tokens: 1,
-        messages: [{ role: 'user', content: 'hi' }],
-      });
-    }
-
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 15000);
-
-    const response = await fetch(url, {
-      method: 'POST',
-      headers,
-      body,
-      signal: controller.signal,
-    });
-
-    clearTimeout(timeout);
-
-    if (response.ok) {
-      ok('API ключ валиден, модель доступна');
-      return true;
-    } else if (response.status === 401 || response.status === 403) {
-      fail(`Невалидный API ключ (HTTP ${response.status})`);
-      const proceed = await askYesNo('Продолжить несмотря на ошибку?', 'n');
-      return proceed;
-    } else if (response.status === 404) {
-      warn(`Модель "${config.model}" не найдена (HTTP 404). Проверьте название модели.`);
-      const proceed = await askYesNo('Продолжить несмотря на ошибку?', 'n');
-      return proceed;
-    } else if (response.status === 429) {
-      warn('Rate limit (HTTP 429) — ключ валиден, но превышен лимит запросов');
-      ok('API ключ валиден');
-      return true;
-    } else {
-      const text = await response.text().catch(() => '');
-      warn(`Неожиданный ответ (HTTP ${response.status}): ${text.slice(0, 200)}`);
-      const proceed = await askYesNo('Продолжить несмотря на ошибку?', 'n');
-      return proceed;
-    }
-  } catch (error) {
-    if (error.name === 'AbortError') {
-      warn('Таймаут запроса (15с) — сеть недоступна или API не отвечает');
-      const proceed = await askYesNo('Продолжить без валидации?', 'y');
-      return proceed;
-    }
-    warn(`Ошибка валидации: ${error.message}`);
-    const proceed = await askYesNo('Продолжить без валидации?', 'y');
-    return proceed;
-  }
-}
 
 // ─── Step 5: Save config ─────────────────────────────────────────────────────
 
@@ -438,10 +279,8 @@ async function main() {
   log('Этот скрипт поможет вам:');
   log('  1. Проверить Node.js');
   log('  2. Установить Playwright (для браузерных инструментов)');
-  log('  3. Настроить API ключи для vision-backend');
-  log('  4. Проверить работоспособность API');
-  log('  5. Сохранить конфигурацию');
-  log('  6. Получить инструкции для подключения к агенту');
+  log('  3. Сохранить конфигурацию');
+  log('  4. Получить инструкции для подключения к агенту');
   log('');
 
   // Шаг 1: Node.js
@@ -452,39 +291,16 @@ async function main() {
   // Шаг 2: Playwright
   await setupPlaywright();
 
-  // Шаг 3: API config
-  const visionConfig = await setupApiConfig();
-
-  // Шаг 4: Валидация
-  if (visionConfig) {
-    await validateApiKey(visionConfig);
-  }
-
-  // Шаг 5: Сохранение конфига
-  step(5, 'Сохранение конфигурации');
+  // Шаг 3: Сохранение конфига
+  step(3, 'Сохранение конфигурации');
 
   const configPath = join(ensureConfigDir(), 'config.json');
   const config = loadOrCreateConfig(configPath);
+  saveConfig(configPath, config);
+  ok(`Конфигурация сохранена: ${configPath}`);
 
-  if (visionConfig) {
-    config.vision = {
-      provider: visionConfig.provider,
-      model: visionConfig.model,
-      apiKey: visionConfig.apiKey,
-      ...(visionConfig.baseUrl ? { baseUrl: visionConfig.baseUrl } : {}),
-    };
-    saveConfig(configPath, config);
-    ok(`Конфигурация сохранена: ${configPath}`);
-  } else {
-    warn('Vision-backend не настроен. Вы можете настроить его позже.');
-    info(`Через config file: ${C.dim}~/.vsl/config.json${C.reset}`);
-    info(`Через env vars: ${C.dim}VSL_VISION_PROVIDER, VSL_VISION_BASE_URL, VSL_VISION_API_KEY, VSL_VISION_MODEL${C.reset}`);
-  }
-
-  // Шаг 6: Инструкции
-  if (visionConfig) {
-    printAgentInstructions(visionConfig);
-  }
+  // Шаг 4: Инструкции
+  printAgentInstructions(null);
 
   // Финал
   log(`${C.bold}✨ Готово!${C.reset}`);

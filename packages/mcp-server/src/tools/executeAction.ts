@@ -21,6 +21,10 @@
 
 import type { BrowserManager } from '../browser/manager.js';
 import type { ServerSession } from '../session/serverSession.js';
+import type { SnapshotInput } from '@thinkingos/vsl-sdk';
+
+import { computeToolMetrics } from '../utils/metrics.js';
+import { extractDomTreeInBrowser } from './getSnapshot.js';
 
 /** Поддерживаемые действия. */
 const VALID_ACTIONS = [
@@ -44,13 +48,71 @@ export interface ExecuteActionArgs {
   action: string;
   target_id: string;
   value?: string;
+  /**
+   * Если true, возвращает обновлённое состояние страницы (diff/snapshot) после действия.
+   * Полезно для агентов, чтобы видеть изменения без отдельного вызова vsl_get_snapshot.
+   * Default: true — всегда возвращать состояние для экономии ходов агента.
+   */
+  return_state?: boolean;
 }
-
 /** Результат vsl_execute_action. */
 export interface ExecuteActionResult {
+
   status: 'success' | 'error';
-  data?: { action: string; target_id: string; success: boolean; download?: { downloadId: string; filename: string; url: string; status: 'pending' | 'completed' | 'cancelled' | 'failed' }; upload?: { selector: string; files: string[]; success: boolean } };
+  data?: {
+    action: string;
+    target_id: string;
+    success: boolean;
+    download?: { downloadId: string; filename: string; url: string; status: 'pending' | 'completed' | 'cancelled' | 'failed' };
+    upload?: { selector: string; files: string[]; success: boolean };
+    /** Обновлённое состояние страницы (если return_state=true). */
+    state?: {
+      /** Diff с момента предыдущего snapshot (добавленные/изменённые/удалённые элементы). */
+      diff?: unknown;
+      /** Полный snapshot (если был первый вызов или URL изменился). */
+      snapshot?: unknown;
+    };
+  };
   error?: string;
+  /** Метрики производительности (DEC-029). */
+  metadata?: { json_size_bytes: number; estimated_tokens: number; execution_time_ms: number; timestamp: string };
+}
+
+/**
+ * Получает обновлённое состояние страницы после действия.
+ * Используется для return_state параметра.
+ */
+async function getStateAfterAction(
+  session: ServerSession,
+  browser: BrowserManager,
+  url: string,
+): Promise<{ diff?: unknown; snapshot?: unknown } | undefined> {
+  try {
+    // Извлечь обновлённый DOM
+    const elements = await browser.evaluate(extractDomTreeInBrowser);
+    // Получить viewport для SnapshotInput
+    const viewport = await browser.evaluate(() => ({
+      width: window.innerWidth,
+      height: window.innerHeight,
+    }));
+    // Обновить snapshot в сессии
+    const input: SnapshotInput = {
+      viewport: viewport as { width: number; height: number },
+      url,
+      title: '',
+      timestamp: new Date().toISOString(),
+    };
+    session.snapshotFromElements(elements as unknown[], input);
+    // Получить diff с момента предыдущего snapshot
+    const diff = session.getDiff();
+    // Получить полный snapshot
+    const snapshot = session.getSnapshot();
+    return { diff, snapshot };
+  } catch (error) {
+    // Если не удалось получить состояние, возвращаем undefined
+    console.warn('Failed to get state after action:', error);
+    return undefined;
+  }
 }
 
 /**
@@ -65,6 +127,8 @@ export async function handleExecuteAction(
   browser: BrowserManager,
   session: ServerSession,
 ): Promise<ExecuteActionResult> {
+  const startTime = Date.now();
+
   try {
     // 1. Валидация аргументов
     if (!args.action || typeof args.action !== 'string') {
@@ -87,6 +151,35 @@ export async function handleExecuteAction(
         status: 'error',
         error: `Unknown action: ${args.action}. Valid actions: ${VALID_ACTIONS.join(', ')}`,
       };
+    }
+
+    // Валидация return_state (DEC-030)
+    if (args.return_state !== undefined && typeof args.return_state !== 'boolean') {
+      return {
+        status: 'error',
+        error: 'return_state must be a boolean (true or false)',
+      };
+    }
+
+    // Валидация value для scroll (DEC-030)
+    if (args.action === 'scroll' && args.value !== undefined) {
+      const VALID_SCROLL_VALUES = ['up', 'down'];
+      if (!VALID_SCROLL_VALUES.includes(args.value)) {
+        return {
+          status: 'error',
+          error: 'Invalid scroll value: ' + args.value + '. Valid values: ' + VALID_SCROLL_VALUES.join(', '),
+        };
+      }
+    }
+
+    // Валидация value для type/fill/select (DEC-030)
+    if ((args.action === 'type' || args.action === 'fill' || args.action === 'select') && args.value !== undefined) {
+      if (typeof args.value !== 'string') {
+        return {
+          status: 'error',
+          error: 'value must be a string for ' + args.action + ' action',
+        };
+      }
     }
 
     // 2. Проверяем, что есть snapshot
@@ -122,6 +215,26 @@ export async function handleExecuteAction(
     // 5. TODO: Найти элемент по target_id в VSL snapshot
     //    Сейчас используем target_id как CSS selector
     //    В будущем: маппинг VSL id → DOM selector через snapshot
+
+    // Проверка наличия data-vsl-id атрибутов в DOM
+    // Если атрибутов нет (например, после vsl_read_page без браузера),
+    // автоматически создаём snapshot для инжекта data-vsl-id
+    const hasVslIds = await browser.evaluate(() => {
+      return document.querySelector('[data-vsl-id]') !== null;
+    });
+
+    if (!hasVslIds) {
+      // Автоматическое создание snapshot
+      const elements = await browser.evaluate(extractDomTreeInBrowser);
+      const viewport = await browser.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }));
+      const input: SnapshotInput = {
+        viewport: viewport as { width: number; height: number },
+        url: snapshotUrl || '',
+        title: '',
+        timestamp: new Date().toISOString(),
+      };
+      session.snapshotFromElements(elements as unknown[], input);
+    }
 
     const selector = `[data-vsl-id="${args.target_id}"], #${args.target_id}, .${args.target_id}`;
 
@@ -216,7 +329,7 @@ export async function handleExecuteAction(
             return id;
           }, args.value);
           const filename = args.value.split('/').pop() || 'download';
-          return {
+          const result: ExecuteActionResult = {
             status: 'success',
             data: {
               action: args.action,
@@ -230,6 +343,22 @@ export async function handleExecuteAction(
               },
             },
           };
+
+          // Добавить состояние страницы, если запрошено
+          if (args.return_state !== false) {
+            try {
+              const currentUrl = await browser.evaluate(() => window.location.href);
+              const state = await getStateAfterAction(session, browser, currentUrl as string);
+              if (state && result.data) {
+                result.data.state = state;
+              }
+            } catch {
+              // Gracefully ignore getStateAfterAction errors
+            }
+          }
+
+          result.metadata = computeToolMetrics(result.data, startTime);
+          return result;
         }
         // Клик по элементу (кнопка/ссылка для скачивания)
         await browser.evaluate((sel: string) => {
@@ -256,7 +385,7 @@ export async function handleExecuteAction(
           };
         }
         await browser.uploadFile(selector, filePaths);
-        return {
+        const result: ExecuteActionResult = {
           status: 'success',
           data: {
             action: args.action,
@@ -269,6 +398,22 @@ export async function handleExecuteAction(
             },
           },
         };
+
+        // Добавить состояние страницы, если запрошено
+        if (args.return_state !== false) {
+          try {
+            const currentUrl = await browser.evaluate(() => window.location.href);
+            const state = await getStateAfterAction(session, browser, currentUrl as string);
+            if (state && result.data) {
+              result.data.state = state;
+            }
+          } catch {
+            // Gracefully ignore getStateAfterAction errors
+          }
+        }
+
+        result.metadata = computeToolMetrics(result.data, startTime);
+        return result;
       }
 
       default:
@@ -278,7 +423,7 @@ export async function handleExecuteAction(
         };
     }
 
-    return {
+    const result: ExecuteActionResult = {
       status: 'success',
       data: {
         action: args.action,
@@ -286,6 +431,20 @@ export async function handleExecuteAction(
         success: true,
       },
     };
+
+    // Всегда возвращать состояние страницы (return_state=true по умолчанию)
+    try {
+      const currentUrl = await browser.evaluate(() => window.location.href);
+      const state = await getStateAfterAction(session, browser, currentUrl as string);
+      if (state && result.data) {
+        result.data.state = state;
+      }
+    } catch {
+      // Gracefully ignore getStateAfterAction errors
+    }
+
+    result.metadata = computeToolMetrics(result.data, startTime);
+    return result;
   } catch (error) {
     return {
       status: 'error',

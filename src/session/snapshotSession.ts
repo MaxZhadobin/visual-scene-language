@@ -98,12 +98,47 @@ export class VslSnapshotSession {
   }
 
   /**
+   * Сбрасывает состояние сессии (URL, viewport, документ, версия).
+   * Следующий вызов snapshot() вернёт полный документ (как первый вызов).
+   */
+  clear(): void {
+    this.store.clear();
+    this.lastUrl = null;
+    this.lastViewport = null;
+    this.lastDocument = null;
+    this.version = 0;
+  }
+
+  /** Возвращает последний полный документ (не diff). */
+  getLastDocument(): VslDocument | null {
+    return this.lastDocument;
+  }
+
+  /** Текущая версия документа (инкрементируется при каждом diff). */
+  getVersion(): number {
+    return this.version;
+  }
+
+  /**
    * Строит VSL из DOM поддерева root (extractDomTree → segmentTree →
    * buildVslDocument) и возвращает полный документ либо дифф (см. шапку).
    */
   snapshot(root: Element, input: SnapshotInput): SnapshotResult {
     const elements = segmentTree(extractDomTree(root));
     return this.commit(elements, this.buildOptions(root, input), input);
+  }
+
+  /**
+   * Вариант snapshot() для pre-extracted elements (MCP сервер, Node.js контекст).
+   * Принимает ExtractedElement[] напрямую (без DOM Element), проходит тот же
+   * pipeline: segmentTree → buildVslDocument → cache/diff.
+   */
+  snapshotFromElements(
+    extractedElements: readonly import('../capture/domExtractor').ExtractedElement[],
+    input: SnapshotInput,
+  ): SnapshotResult {
+    const elements = segmentTree(extractedElements as never);
+    return this.commit(elements, this.buildOptionsFromInput(input), input);
   }
 
   /**
@@ -124,6 +159,21 @@ export class VslSnapshotSession {
     return { snapshot, fragments: visionResult.fragments };
   }
 
+  /**
+   * Vision-вариант для pre-extracted elements (MCP сервер, Node.js контекст).
+   * Полный pipeline: segmentTree → enrichWithVision → buildVslDocument → cache/diff.
+   */
+  async snapshotWithVisionFromElements(
+    extractedElements: readonly import('../capture/domExtractor').ExtractedElement[],
+    input: SnapshotInput,
+    vision: EnrichWithVisionDeps,
+  ): Promise<VisionSnapshotResult> {
+    const elements = segmentTree(extractedElements as never);
+    const visionResult = await enrichWithVision(elements, vision);
+    const snapshot = this.commit(elements, this.buildOptionsFromInput(input), input);
+    return { snapshot, fragments: visionResult.fragments };
+  }
+
   /** BuildOptions из input + портативный title (логика бывшего snapshot()). */
   private buildOptions(root: Element, input: SnapshotInput): BuildOptions {
     const options: BuildOptions = {
@@ -133,6 +183,21 @@ export class VslSnapshotSession {
     // title: из input, иначе из документа root — ПОРТАТИВНО, без глобального
     // document (дефолт builder document.title упал бы в Node — packaging-smoke).
     options.title = input.title ?? root.ownerDocument.title;
+    if (input.timestamp !== undefined) options.timestamp = input.timestamp;
+    if (input.background !== undefined) options.background = input.background;
+    return options;
+  }
+
+  /**
+   * BuildOptions из input без DOM Element (для snapshotFromElements).
+   * Title берётся только из input (нет фолбэка на root.ownerDocument.title).
+   */
+  private buildOptionsFromInput(input: SnapshotInput): BuildOptions {
+    const options: BuildOptions = {
+      viewport: { width: input.viewport.width, height: input.viewport.height },
+      url: input.url,
+    };
+    if (input.title !== undefined) options.title = input.title;
     if (input.timestamp !== undefined) options.timestamp = input.timestamp;
     if (input.background !== undefined) options.background = input.background;
     return options;

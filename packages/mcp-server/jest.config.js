@@ -14,6 +14,9 @@ const config = {
     '^(\\.{1,2}/.*)\\.js$': '$1',
     '^@thinkingos/vsl-sdk$': '<rootDir>/../../dist/index.mjs',
   },
+  transformIgnorePatterns: [
+    'node_modules/(?!@thinkingos/vsl-sdk)',
+  ],
   transform: {
     '^.+\\.tsx?$': [
       'ts-jest',

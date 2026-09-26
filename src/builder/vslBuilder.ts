@@ -72,6 +72,8 @@ function defaultActions(
     case 'link':
     case 'tab':
       return ['click'];
+    case 'dropdown_toggle':
+      return ['click', 'expand', 'collapse'];
     case 'modal':
       return ['close'];
     case 'input': {
@@ -197,6 +199,10 @@ function toVslObject(
   if (t === 'file_input') {
     if (el.attributes['accept'] !== undefined) object.accept = el.attributes['accept'];
     if (el.attributes['multiple'] !== undefined) object.multiple = true;
+  }
+  // dropdown_toggle: извлекаем aria-haspopup как hasPopup
+  if (t === 'dropdown_toggle' && el.attributes['aria-haspopup'] !== undefined) {
+    object.hasPopup = el.attributes['aria-haspopup'];
   }
   return object;
 }

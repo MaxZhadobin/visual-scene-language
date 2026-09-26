@@ -85,6 +85,7 @@ VSL оптимизирован для LLM-контекста. Каждый ба�
 | `container` | Группировка элементов | Card, modal, sidebar |
 | `canvas` | Canvas/WebGL элемент | Charts, games, custom widgets |
 | `video` | Видео-элемент | Player, preview |
+| `dropdown_toggle` | Кнопка открытия dropdown-меню | Menu button, select toggle |
 
 ### 2.3 Extensibility
 
@@ -144,6 +145,7 @@ VSL должен позволять добавлять новые типы эл�
 - `radio` — радио-кнопка
 - `select` — выпадающий список
 - `dropdown` — раскрывающееся меню
+- `dropdown_toggle` — кнопка открытия dropdown-меню (aria-haspopup='menu' или 'listbox')
 - `container` — контейнер (div, section)
 - `modal` — модальное окно
 - `sidebar` — боковая панель
@@ -175,6 +177,7 @@ VSL должен позволять добавлять новые типы эл�
 | `anchor` | `a` | string | Точка привязки |
 | `custom` | `c` | object | Кастомные свойства |
 | `actions` | `act` | array | Доступные действия |
+| `hasPopup` | `hasPopup` | string | Тип popup для dropdown_toggle (menu, listbox) |
 | `metadata` | `meta` | object | Мета-данные |
 
 ### 3.3 State Descriptors

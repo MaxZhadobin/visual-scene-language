@@ -20,6 +20,7 @@ export type VslType =
   | 'textarea'
   | 'modal'
   | 'tab'
+  | 'dropdown_toggle'
   // Level 3 — CSS-анализ (§2.2.1):
   | 'heading'
   | 'footer'
@@ -145,6 +146,8 @@ export interface VslObject {
   accept?: string;
   /** Multiple attribute для file_input — разрешена загрузка нескольких файлов. */
   multiple?: boolean;
+  /** Атрибут aria-haspopup — указывает на dropdown/menu (для LLM). */
+  hasPopup?: string;
 }
 
 export interface VslDocument {

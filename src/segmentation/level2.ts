@@ -30,6 +30,19 @@ export function resolveAriaRoleType(role: string | undefined): VslType | null {
   return ARIA_ROLE_TYPE_MAP[role.toLowerCase()] ?? null;
 }
 
+/**
+ * Определяет dropdown toggle по атрибуту aria-haspopup.
+ * Возвращает 'dropdown_toggle' для aria-haspopup='menu' или 'listbox',
+ * иначе null. Используется для кнопок, открывающих dropdown меню.
+ */
+export function resolveDropdownToggle(attributes: Record<string, string>): VslType | null {
+  const hasPopup = attributes['aria-haspopup'];
+  if (hasPopup === 'menu' || hasPopup === 'listbox') {
+    return 'dropdown_toggle';
+  }
+  return null;
+}
+
 const TRUE = 'true';
 
 /**

@@ -178,6 +178,60 @@ describe('buildVslDocument: объекты (id/t/r/p/s/st/txt/act/ch)', () => {
   });
 });
 
+describe('buildVslDocument: dropdown_toggle (aria-haspopup)', () => {
+  afterEach(() => {
+    document.body.innerHTML = '';
+  });
+
+  it('button с aria-haspopup="menu" → t=dropdown_toggle, hasPopup=menu, act=[click,expand,collapse]', () => {
+    const doc = buildFromHtml(
+      '<button aria-haspopup="menu" data-rect="0,0,120,40">Меню</button>',
+    );
+    expect(doc.objects).toHaveLength(1);
+    const btn = doc.objects[0]!;
+    expect(btn.t).toBe('dropdown_toggle');
+    expect(btn.hasPopup).toBe('menu');
+    expect(btn.act).toEqual(['click', 'expand', 'collapse']);
+    expect(btn.txt).toBe('Меню');
+  });
+
+  it('button с aria-haspopup="listbox" → t=dropdown_toggle, hasPopup=listbox', () => {
+    const doc = buildFromHtml(
+      '<button aria-haspopup="listbox" data-rect="0,0,120,40">Выбрать</button>',
+    );
+    const btn = doc.objects[0]!;
+    expect(btn.t).toBe('dropdown_toggle');
+    expect(btn.hasPopup).toBe('listbox');
+    expect(btn.act).toEqual(['click', 'expand', 'collapse']);
+  });
+
+  it('button с aria-haspopup="dialog" → НЕ dropdown_toggle (обычный button)', () => {
+    const doc = buildFromHtml(
+      '<button aria-haspopup="dialog" data-rect="0,0,120,40">Открыть</button>',
+    );
+    const btn = doc.objects[0]!;
+    expect(btn.t).toBe('button');
+    expect(btn.hasPopup).toBeUndefined();
+    expect(btn.act).toEqual(['click']);
+  });
+
+  it('button без aria-haspopup → обычный button (обратно-совместимо)', () => {
+    const doc = buildFromHtml('<button data-rect="0,0,120,40">OK</button>');
+    const btn = doc.objects[0]!;
+    expect(btn.t).toBe('button');
+    expect(btn.hasPopup).toBeUndefined();
+    expect(btn.act).toEqual(['click']);
+  });
+
+  it('dropdown_toggle с aria-expanded → st=expanded', () => {
+    const doc = buildFromHtml(
+      '<button aria-haspopup="menu" aria-expanded="true" data-rect="0,0,120,40">Меню</button>',
+    );
+    const btn = doc.objects[0]!;
+    expect(btn.t).toBe('dropdown_toggle');
+    expect(btn.st).toBe('expanded');
+  });
+});
 describe('buildVslDocument: visual_fragments (T1.5.4, AC[5])', () => {
   const VF_META = {
     type: 'icon',

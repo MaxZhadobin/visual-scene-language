@@ -9,6 +9,7 @@
  *  2. Возврат результата
  */
 
+import { computeToolMetrics } from '../utils/metrics.js';
 import type { ServerSession } from '../session/serverSession.js';
 
 /** Результат vsl_clear_cache. */
@@ -16,6 +17,8 @@ export interface ClearCacheResult {
   status: 'success' | 'error';
   data?: { message: string };
   error?: string;
+  /** Метрики производительности (DEC-029). */
+  metadata?: { json_size_bytes: number; estimated_tokens: number; execution_time_ms: number; timestamp: string };
 }
 
 /**
@@ -24,6 +27,8 @@ export interface ClearCacheResult {
  * @param session - Server Session
  */
 export async function handleClearCache(session: ServerSession): Promise<ClearCacheResult> {
+  const startTime = Date.now();
+
   try {
     session.clear();
 
@@ -32,6 +37,7 @@ export async function handleClearCache(session: ServerSession): Promise<ClearCac
       data: {
         message: 'Cache cleared. Next vsl_get_snapshot will create a new snapshot from scratch.',
       },
+      metadata: computeToolMetrics({ cleared: true }, startTime),
     };
   } catch (error) {
     return {

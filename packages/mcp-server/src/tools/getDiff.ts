@@ -10,6 +10,7 @@
  *  3. Возвращаем Diff JSON (или ошибку, если нет предыдущего snapshot)
  */
 
+import { computeToolMetrics } from '../utils/metrics.js';
 import type { ServerSession } from '../session/serverSession.js';
 
 /** Результат vsl_get_diff. */
@@ -17,6 +18,8 @@ export interface GetDiffResult {
   status: 'success' | 'error';
   data?: unknown;
   error?: string;
+  /** Метрики производительности (DEC-029). */
+  metadata?: { json_size_bytes: number; estimated_tokens: number; execution_time_ms: number; timestamp: string };
 }
 
 /**
@@ -25,6 +28,8 @@ export interface GetDiffResult {
  * @param session - Server Session
  */
 export async function handleGetDiff(session: ServerSession): Promise<GetDiffResult> {
+  const startTime = Date.now();
+
   try {
     // 1. Проверяем, что есть текущий snapshot
     if (!session.hasSnapshot()) {
@@ -44,10 +49,11 @@ export async function handleGetDiff(session: ServerSession): Promise<GetDiffResu
       };
     }
 
-    // 3. Возвращаем Diff JSON
+    // 3. Возвращаем Diff JSON с метриками
     return {
       status: 'success',
       data: diff,
+      metadata: computeToolMetrics(diff, startTime),
     };
   } catch (error) {
     return {

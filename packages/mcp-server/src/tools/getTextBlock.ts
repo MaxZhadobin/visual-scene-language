@@ -13,6 +13,7 @@
  *  4. Возврат полного текста или ошибка
  */
 
+import { computeToolMetrics } from '../utils/metrics.js';
 import type { ServerSession } from '../session/serverSession.js';
 
 /** Аргументы vsl_get_text_block. */
@@ -28,6 +29,8 @@ export interface GetTextBlockResult {
     text: string;
   };
   error?: string;
+  /** Метрики производительности (DEC-029). */
+  metadata?: { json_size_bytes: number; estimated_tokens: number; execution_time_ms: number; timestamp: string };
 }
 
 /**
@@ -40,6 +43,8 @@ export async function handleGetTextBlock(
   args: GetTextBlockArgs,
   session: ServerSession,
 ): Promise<GetTextBlockResult> {
+  const startTime = Date.now();
+
   try {
     // 1. Валидация block_id
     if (!args.block_id || typeof args.block_id !== 'string') {
@@ -76,13 +81,15 @@ export async function handleGetTextBlock(
       };
     }
 
-    // 5. Возвращаем полный текст
+    // 5. Возвращаем полный текст с метриками
+    const data = {
+      block_id: args.block_id,
+      text: fullText,
+    };
     return {
       status: 'success',
-      data: {
-        block_id: args.block_id,
-        text: fullText,
-      },
+      data,
+      metadata: computeToolMetrics(data, startTime),
     };
   } catch (error) {
     return {

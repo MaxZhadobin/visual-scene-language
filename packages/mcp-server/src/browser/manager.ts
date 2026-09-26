@@ -48,7 +48,8 @@ interface PlaywrightFileChooser {
 interface PlaywrightPage {
   goto(url: string, options?: { timeout?: number; waitUntil?: string }): Promise<unknown>;
   content(): Promise<string>;
-  evaluate<T>(fn: string | ((...args: unknown[]) => T), ...args: unknown[]): Promise<T>;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  evaluate<T>(fn: string | ((...args: any[]) => T), ...args: any[]): Promise<T>;
   screenshot(options?: { type?: string; fullPage?: boolean; clip?: { x: number; y: number; width: number; height: number } }): Promise<Buffer>;
   close(): Promise<void>;
   waitForSelector(selector: string, options?: { timeout?: number }): Promise<unknown>;
@@ -116,8 +117,7 @@ export class BrowserManager {
     const pw = await this.loadPlaywright();
     if (!pw) {
       throw new Error(
-        'Playwright is not installed. Install it with: npm install playwright\n' +
-        'Or use vsl_read_page with mode="http" for static pages (no browser required).',
+        'Playwright is not installed. Install it with: npm install playwright',
       );
     }
 
@@ -183,7 +183,8 @@ export class BrowserManager {
   /**
    * Выполняет JavaScript в контексте страницы.
    */
-  async evaluate<T>(fn: string | ((...args: unknown[]) => T), ...args: unknown[]): Promise<T> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  async evaluate<T>(fn: string | ((...args: any[]) => T), ...args: any[]): Promise<T> {
     const page = await this.getPage();
     return page.evaluate(fn, ...args);
   }
@@ -291,7 +292,8 @@ export class BrowserManager {
     if (isAbsolute) {
       await download.saveAs(savePath);
     } else {
-      const resolvedBase = path.resolve(this.config.downloadsPath.replace(/^~/, os.homedir()));
+      const downloadsPath = this.config.downloadsPath ?? os.tmpdir();
+      const resolvedBase = path.resolve(downloadsPath.replace(/^~/, os.homedir()));
       const resolvedSave = path.resolve(resolvedBase, savePath);
       if (!resolvedSave.startsWith(resolvedBase + path.sep) && resolvedSave !== resolvedBase) {
         throw new Error(`Path traversal detected: save_path '${savePath}' escapes downloads directory '${resolvedBase}'`);
@@ -355,7 +357,7 @@ export class BrowserManager {
     }
 
     // Устанавливаем файлы через Playwright
-    await page.setInputFiles(selector, resolvedPaths.length === 1 ? resolvedPaths[0] : resolvedPaths);
+    await page.setInputFiles(selector, resolvedPaths.length === 1 ? resolvedPaths[0]! : resolvedPaths);
   }
 
   /**

@@ -8,20 +8,55 @@
  * Flow:
  *  1. Навигация по URL (если указан)
  *  2. Извлечение DOM-дерева через evaluate() → ExtractedElement[]
- *  3. Сегментация → VslDocument (через SDK: segmentTree → buildVslDocument)
+ *  3. Передача в ServerSession.snapshotFromElements() → SDK pipeline:
+ *     segmentTree → buildVslDocument → cache → diff
  *  4. Запись data-vsl-id атрибутов в DOM для execute_action
- *  5. Сохранение в ServerSession
- *  6. Возврат VSL JSON
+ *  5. Возврат VSL JSON (полный документ или diff)
+ *
+ * Архитектура: MCP сервер построен ПОВЕРХ SDK.
+ * Весь pipeline (сегментация, построение, кэш, дифф) выполняется SDK.
  */
 
 import type { BrowserManager } from '../browser/manager.js';
 import type { ServerSession } from '../session/serverSession.js';
 import type { McpServerConfig } from '../config/loader.js';
-import { segmentTree, buildVslDocument, type VslDocument, type VslObject } from '@thinkingos/vsl-sdk';
+import type { VslDocument, VslObject, SnapshotInput, SnapshotResult } from '@thinkingos/vsl-sdk';
+import { isVslDiff } from '@thinkingos/vsl-sdk';
+
+/** Уровни детализации snapshot (DEC-027). */
+export type DetailLevel = 'low' | 'medium' | 'high';
+
+/** TTL кэша snapshot по умолчанию (5 секунд). */
+const DEFAULT_SNAPSHOT_TTL_MS = 5000;
+
+/** Запись кэша snapshot. */
+interface SnapshotCacheEntry {
+  result: GetSnapshotResult;
+  timestamp: number;
+  url: string;
+  detailLevel: DetailLevel;
+}
+
+/** Кэш snapshot (ключ: URL + detail_level). */
+const snapshotCache = new Map<string, SnapshotCacheEntry>();
+
 
 /** Аргументы vsl_get_snapshot. */
 export interface GetSnapshotArgs {
   url?: string;
+  /**
+   * Уровень детализации snapshot (default: 'high').
+   * - 'low': только интерактивные элементы (кнопки, ссылки, инпуты)
+   * - 'medium': интерактивные + контейнеры
+   * - 'high': все объекты (полный DOM)
+   */
+  detail_level?: DetailLevel;
+  /**
+   * TTL кэша в миллисекундах (default: 5000 = 5s).
+   * Если snapshot был получен менее TTL назад, возвращается из кэша.
+   * Установите 0 для отключения кэширования.
+   */
+  ttl?: number;
 }
 
 /** Результат vsl_get_snapshot. */
@@ -29,13 +64,117 @@ export interface GetSnapshotResult {
   status: 'success' | 'error';
   data?: unknown;
   error?: string;
+  /** Метрики производительности (DEC-029). */
+  metadata?: SnapshotMetadata;
+}
+
+/** Метрики snapshot (DEC-029). */
+export interface SnapshotMetadata {
+  /** Размер JSON в байтах. */
+  json_size_bytes: number;
+  /** Приблизительное количество токенов (size / 4). */
+  estimated_tokens: number;
+  /** Количество объектов в snapshot. */
+  object_count: number;
+  /** Timestamp генерации snapshot (ISO 8601). */
+  timestamp: string;
+  /** Время выполнения в миллисекундах. */
+  execution_time_ms: number;
+}
+
+/**
+ * Фильтрует объекты VSL по уровню детализации (DEC-027).
+ * - 'low': только интерактивные элементы (кнопки, ссылки, инпуты)
+ * - 'medium': интерактивные + контейнеры
+ * - 'high': все объекты (без фильтрации)
+ */
+function filterObjectsByDetailLevel(
+  objects: VslObject[],
+  level: DetailLevel,
+  ): VslObject[] {
+  if (level === 'high') return objects;
+
+  const INTERACTIVE_TYPES = new Set([
+    'button', 'link', 'input', 'select', 'checkbox', 'radio',
+    'textarea', 'file', 'submit', 'reset',
+  ]);
+
+  const CONTAINER_TYPES = new Set([
+    'div', 'section', 'article', 'nav', 'header', 'footer',
+    'main', 'aside', 'form', 'fieldset',
+  ]);
+
+  function filterRecursive(obj: VslObject): VslObject | null {
+    const type = obj.t || '';
+
+    if (level === 'low') {
+      // Только интерактивные элементы
+      if (!INTERACTIVE_TYPES.has(type)) {
+        // Проверяем детей — если есть интерактивные дети, возвращаем контейнер
+        if (obj.ch && obj.ch.length > 0) {
+          const filteredChildren = obj.ch
+            .map(filterRecursive)
+            .filter((child): child is VslObject => child !== null);
+          if (filteredChildren.length > 0) {
+            return { ...obj, ch: filteredChildren };
+          }
+        }
+        return null;
+      }
+      return obj;
+    }
+
+    if (level === 'medium') {
+      // Интерактивные + контейнеры
+      if (INTERACTIVE_TYPES.has(type) || CONTAINER_TYPES.has(type)) {
+        if (obj.ch && obj.ch.length > 0) {
+          const filteredChildren = obj.ch
+            .map(filterRecursive)
+            .filter((child): child is VslObject => child !== null);
+          return { ...obj, ch: filteredChildren };
+        }
+        return obj;
+      }
+      // Проверяем детей
+      if (obj.ch && obj.ch.length > 0) {
+        const filteredChildren = obj.ch
+          .map(filterRecursive)
+          .filter((child): child is VslObject => child !== null);
+        if (filteredChildren.length > 0) {
+          return { ...obj, ch: filteredChildren };
+        }
+      }
+      return null;
+    }
+
+    return obj;
+  }
+
+  return objects
+    .map(filterRecursive)
+    .filter((obj): obj is VslObject => obj !== null);
+}
+
+/**
+ * Рекурсивно подсчитывает количество объектов в дереве VSL.
+ */
+function countObjects(objects: VslObject[]): number {
+  let count = 0;
+  for (const obj of objects) {
+    count++;
+    if (obj.ch && obj.ch.length > 0) {
+      count += countObjects(obj.ch);
+    }
+  }
+  return count;
 }
 
 /**
  * Извлекает DOM-дерево в формате ExtractedElement[] (SDK-совместимый).
  * Выполняется в браузерном контексте через Playwright evaluate().
+ * Экспортируется для использования в других tools (executeAction с return_state).
  */
-function extractDomTreeInBrowser(): unknown[] {
+export function extractDomTreeInBrowser(): unknown[] {
   // Интерфейсы (копия из SDK для типизации в browser context)
   interface Rect { x: number; y: number; width: number; height: number; }
   interface ElementCss {
@@ -147,62 +286,63 @@ function extractDomTreeInBrowser(): unknown[] {
 }
 
 /**
- * Записывает VSL ID обратно в DOM через data-vsl-id атрибуты.
- * Выполняется в браузерном контексте через Playwright evaluate().
- */
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-function writeVslIdsToDom(objects: readonly VslObject[]): void {
-  function visit(obj: VslObject): void {
-    // ID формат: tag_indexPath (например, button_0_0)
-    // indexPath можно восстановить из ID, но проще искать по tag + позиции
-    // Используем CSS selector с data-vsl-id для точного соответствия
-    const parts = obj.id.split('_');
-    if (parts.length < 2) return;
-    
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    const tag = parts[0];
-    const indexPath = parts.slice(1).map(Number);
-    
-    // Находим элемент по indexPath
-    let current: Element | null = document.body;
-    for (const idx of indexPath) {
-      if (!current) break;
-      const elementChildren = Array.from(current.children);
-      current = elementChildren[idx] || null;
-    }
-    
-    if (current) {
-      current.setAttribute('data-vsl-id', obj.id);
-    }
-    
-    // Рекурсия для детей
-    if (obj.ch) {
-      for (const child of obj.ch) {
-        visit(child);
-      }
-    }
-  }
-  
-  for (const obj of objects) {
-    visit(obj);
-  }
-}
-
-/**
  * Обработчик vsl_get_snapshot.
+ *
+ * Использует SDK pipeline через ServerSession.snapshotFromElements().
+ * MCP сервер не вызывает segmentTree/buildVslDocument напрямую —
+ * всю работу делает SDK.
  *
  * @param args - Аргументы инструмента (url опционально)
  * @param browser - Browser Manager
- * @param session - Server Session
- * @param config - Конфигурация сервера
+ * @param session - Server Session (обёртка над VslSnapshotSession из SDK)
+ * @param _config - Конфигурация сервера
  */
 export async function handleGetSnapshot(
   args: GetSnapshotArgs,
   browser: BrowserManager,
   session: ServerSession,
   _config: McpServerConfig,
-): Promise<GetSnapshotResult> {
+  ): Promise<GetSnapshotResult> {
+  const startTime = Date.now();
+  const detailLevel = args.detail_level || 'high';
+  const ttl = args.ttl ?? DEFAULT_SNAPSHOT_TTL_MS;
+
+  // Валидация параметров (DEC-030)
+  const VALID_DETAIL_LEVELS: DetailLevel[] = ['low', 'medium', 'high'];
+  if (args.detail_level !== undefined && !VALID_DETAIL_LEVELS.includes(args.detail_level)) {
+    return {
+      status: 'error',
+      error: 'Invalid detail_level: ' + args.detail_level + '. Valid values: ' + VALID_DETAIL_LEVELS.join(', '),
+    };
+  }
+
+  if (args.ttl !== undefined && (typeof args.ttl !== 'number' || args.ttl < 0)) {
+    return {
+      status: 'error',
+      error: 'Invalid ttl: ' + args.ttl + '. Must be a non-negative number (milliseconds).',
+    };
+  }
+
   try {
+    // 0. Проверяем кэш snapshot (если TTL > 0)
+    if (ttl > 0) {
+      const cacheKey = `${args.url || 'current'}:${detailLevel}`;
+      const cached = snapshotCache.get(cacheKey);
+      if (cached && (Date.now() - cached.timestamp) <ttl) {
+        return {
+          ...cached.result,
+          metadata: {
+            ...cached.result.metadata,
+            json_size_bytes: cached.result.metadata?.json_size_bytes ?? 0,
+            estimated_tokens: cached.result.metadata?.estimated_tokens ?? 0,
+            object_count: cached.result.metadata?.object_count ?? 0,
+            execution_time_ms: Date.now() - startTime,
+            timestamp: new Date().toISOString(),
+          },
+        };
+      }
+    }
+
     // 1. Навигация по URL (если указан)
     if (args.url) {
       await browser.navigate(args.url);
@@ -214,31 +354,42 @@ export async function handleGetSnapshot(
       return {
         status: 'error',
         error:
-          'Playwright is not installed. Install it with: npm install playwright\n' +
-          'Or use vsl_read_page with mode="http" for static pages.',
+          'Playwright is not installed. Install it with: npm install playwright',
       };
     }
 
     // 3. Извлекаем DOM-дерево в формате ExtractedElement[] (SDK-совместимый)
     const extractedElements = await browser.evaluate(extractDomTreeInBrowser);
 
-    // 4. Получаем viewport размеры и title страницы
+    // 4. Получаем viewport размеры, URL и title страницы для SnapshotInput
     const viewport = await browser.evaluate(() => ({
       width: window.innerWidth,
       height: window.innerHeight,
     }));
+    const url = args.url || (await browser.evaluate(() => window.location.href)) as string;
     const title = await browser.evaluate(() => document.title);
 
-    // 5. Сегментация и построение VSL через SDK
-    const segmentedElements = segmentTree(extractedElements as never);
-    const vslDocument: VslDocument = buildVslDocument(segmentedElements, {
+    // 5. Формируем SnapshotInput и передаём в SDK через ServerSession
+    const input: SnapshotInput = {
       viewport: viewport as { width: number; height: number },
-      url: args.url || (await browser.evaluate(() => window.location.href)) as string,
+      url,
       title: title as string,
       timestamp: new Date().toISOString(),
-    });
+    };
 
-    // 6. Записываем VSL ID обратно в DOM для execute_action
+    // 6. SDK pipeline: segmentTree → buildVslDocument → cache → diff
+    //    Первый вызов возвращает VslDocument, последующие — VslDiff.
+    const result: SnapshotResult = session.snapshotFromElements(
+      extractedElements as never,
+      input,
+    );
+
+    // 7. Определяем текущий документ для записи VSL ID в DOM
+    const currentDoc: VslDocument = isVslDiff(result)
+      ? session.getSnapshot()
+      : result;
+
+    // 8. Записываем VSL ID обратно в DOM для execute_action
     await browser.evaluate(
       (objects: VslObject[]) => {
         function visit(obj: VslObject): void {
@@ -250,7 +401,7 @@ export async function handleGetSnapshot(
           let current: Element | null = document.body;
           for (const idx of indexPath) {
             if (!current) break;
-            const elementChildren = Array.from(current.children);
+            const elementChildren: Element[] = Array.from(current.children);
             current = elementChildren[idx] || null;
           }
           
@@ -269,15 +420,52 @@ export async function handleGetSnapshot(
           visit(obj);
         }
       },
-      vslDocument.objects,
+      currentDoc.objects,
     );
 
-    // 7. Сохраняем в ServerSession
-    session.setSnapshot(vslDocument as never);
+    // 9. Применяем фильтрацию по detail_level (DEC-027)
+    const filteredObjects = filterObjectsByDetailLevel(currentDoc.objects, detailLevel);
+
+    // 10. Формируем результат с отфильтрованными объектами
+    const filteredResult = isVslDiff(result)
+      ? { ...result, objects: filteredObjects }
+      : { ...result, objects: filteredObjects };
+
+    // 11. Вычисляем метрики (DEC-029)
+    const executionTimeMs = Date.now() - startTime;
+    const resultJson = JSON.stringify(filteredResult);
+    const jsonSizeBytes = Buffer.byteLength(resultJson, 'utf-8');
+    const estimatedTokens = Math.ceil(jsonSizeBytes / 4);
+    const objectCount = countObjects(filteredObjects);
+
+    const metadata: SnapshotMetadata = {
+      json_size_bytes: jsonSizeBytes,
+      estimated_tokens: estimatedTokens,
+      object_count: objectCount,
+      timestamp: new Date().toISOString(),
+      execution_time_ms: executionTimeMs,
+    };
+
+    // 12. Сохраняем результат в кэш (если TTL > 0)
+    if (ttl > 0) {
+      const cacheKey = `${args.url || 'current'}:${detailLevel}`;
+      const resultToCache: GetSnapshotResult = {
+        status: 'success',
+        data: filteredResult,
+        metadata,
+      };
+      snapshotCache.set(cacheKey, {
+        result: resultToCache,
+        timestamp: Date.now(),
+        url: args.url || 'current',
+        detailLevel,
+      });
+    }
 
     return {
       status: 'success',
-      data: vslDocument,
+      data: filteredResult,
+      metadata,
     };
   } catch (error) {
     return {

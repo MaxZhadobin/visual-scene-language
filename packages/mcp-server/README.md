@@ -6,20 +6,16 @@ VSL MCP Server — интеграция Visual Scene Language с AI-агента
 
 ## Быстрая установка (одна команда)
 
+
 # Через npx — автоматически скачивает пакет и запускает интерактивный setup:
-
-
 npx -p @thinkingos/vsl-mcp-server mcp-server-setup
 
 
 Setup скрипт поможет вам:
 1. Проверить Node.js >= 18
 2. Установить Playwright (опционально, для браузерных инструментов)
-3. Настроить API ключи для vision-backend (OpenAI / Anthropic / Custom)
-4. Проверить работоспособность API (тестовый запрос)
-5. Сохранить конфигурацию в `~/.vsl/config.json`
-6. Получить инструкции для подключения к агенту
-
+3. Сохранить конфигурацию в `~/.vsl/config.json`
+4. Получить инструкции для подключения к агенту
 ## Установка из исходников (для разработчиков)
 
 ### Из корня monorepo
@@ -36,18 +32,19 @@ cd packages/mcp-server
 npm run build
 ### Интерактивная настройка (рекомендуется)
 
+
 # Из корня monorepo:
 node packages/mcp-server/bin/setup.js
 
 # Или из директории packages/mcp-server:
 npm run setup
+
+
 Setup скрипт поможет вам:
 1. Проверить Node.js >= 18
 2. Установить Playwright (опционально, для браузерных инструментов)
-3. Настроить API ключи для vision-backend (OpenAI, Anthropic, или любой OpenAI-compatible провайдер)
-4. Проверить работоспособность API (тестовый запрос)
-5. Сохранить конфигурацию в `~/.vsl/config.json`
-6. Получить инструкции для подключения к агенту
+3. Сохранить конфигурацию в `~/.vsl/config.json`
+4. Получить инструкции для подключения к агенту
 
 ## Конфигурация
 
@@ -147,12 +144,14 @@ Agent: vsl_execute_action(action="upload", target_id="file_input_1", value="/pat
 
 ### vsl_get_visual
 
-Получить visual fragment для элемента (base64 WebP изображение).
+Получить visual fragment для элемента (base64 WebP изображение). Автоматически прокручивает страницу к элементу если он вне viewport.
 
 **Параметры:**
 - `element_id` (string, required) — ID элемента в VSL JSON
+- `auto_scroll` (boolean, optional, default: true) — автоматически прокручивать к элементу если он вне viewport
+- `auto_refresh` (boolean, optional, default: false) — автоматически обновлять snapshot перед поиском
 
-**Возвращает:** base64-изображение элемента.
+**Возвращает:** base64-изображение элемента. Если был выполнен автоскролл, результат содержит `scroll_info: { scrolled: true, scroll_offset: { x, y } }`.
 
 ### vsl_read_page
 

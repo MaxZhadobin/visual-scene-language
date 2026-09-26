@@ -16,6 +16,7 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 
 import type { McpServerConfig } from '../config/loader.js';
+import type { SessionManager } from '../session/sessionManager.js';
 import type { ServerSession } from '../session/serverSession.js';
 
 /** Список всех ресурсов VSL. */
@@ -39,9 +40,9 @@ const VSL_RESOURCES = [
  *
  * @param server - MCP Server instance
  * @param config - Конфигурация сервера
- * @param session - Server Session для получения snapshot/diff
+ * @param sessionManager - Session Manager для per-session isolation
  */
-export function registerResources(server: Server, _config: McpServerConfig, session: ServerSession): void {
+export function registerResources(server: Server, _config: McpServerConfig, sessionManager: SessionManager): void {
   // Handler: список ресурсов
   server.setRequestHandler(ListResourcesRequestSchema, async () => {
     return {
@@ -52,6 +53,14 @@ export function registerResources(server: Server, _config: McpServerConfig, sess
   // Handler: чтение ресурса
   server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
     const { uri } = request.params;
+
+    // Per-session isolation: извлекаем sessionId из _meta или используем default из env VSL_SESSION_ID
+    const sessionId = (request.params as unknown as { _meta?: { sessionId?: string } })._meta?.sessionId ?? sessionManager.getDefaultSessionId();
+    const { session } = sessionManager.getSession(sessionId);
+
+    // Подписываемся на изменения этой session (лениво)
+    ensureSubscribed(sessionId, session);
+
 
     switch (uri) {
       case 'vsl://current':
@@ -126,18 +135,28 @@ export function registerResources(server: Server, _config: McpServerConfig, sess
     }
   });
 
-  // Подписка на изменения: при каждом setSnapshot() отправляем уведомления
-  session.setOnSnapshotChange(() => {
-    // Уведомляем клиентов об изменении vsl://current
-    server.sendResourceUpdated({ uri: 'vsl://current' }).catch(() => {
-      // Игнорируем ошибки отправки (клиент может быть отключён)
-    });
+  // Per-session подписка на изменения ресурсов.
+  // Подписываемся лениво при первом запросе ресурса для каждой session.
+  const subscribedSessions = new Set<string>();
 
-    // Уведомляем клиентов об изменении vsl://diff (если есть предыдущий snapshot)
-    if (session.getDiff()) {
-      server.sendResourceUpdated({ uri: 'vsl://diff' }).catch(() => {
-        // Игнорируем ошибки отправки
+  // Функция для подписки на изменения session
+  function ensureSubscribed(sessionId: string, session: ServerSession): void {
+    if (subscribedSessions.has(sessionId)) return;
+    subscribedSessions.add(sessionId);
+
+    session.setOnSnapshotChange(() => {
+      // Уведомляем клиентов об изменении vsl://current
+      server.sendResourceUpdated({ uri: 'vsl://current' }).catch(() => {
+        // Игнорируем ошибки отправки (клиент может быть отключён)
       });
-    }
-  });
+
+      // Уведомляем клиентов об изменении vsl://diff (если есть предыдущий snapshot)
+      if (session.getDiff()) {
+        server.sendResourceUpdated({ uri: 'vsl://diff' }).catch(() => {
+          // Игнорируем ошибки отправки
+        });
+      }
+    });
+  }
+
 }
