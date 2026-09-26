@@ -222,17 +222,19 @@ export async function handleGetSnapshot(
     // 3. Извлекаем DOM-дерево в формате ExtractedElement[] (SDK-совместимый)
     const extractedElements = await browser.evaluate(extractDomTreeInBrowser);
 
-    // 4. Получаем viewport размеры
+    // 4. Получаем viewport размеры и title страницы
     const viewport = await browser.evaluate(() => ({
       width: window.innerWidth,
       height: window.innerHeight,
     }));
+    const title = await browser.evaluate(() => document.title);
 
     // 5. Сегментация и построение VSL через SDK
     const segmentedElements = segmentTree(extractedElements as never);
     const vslDocument: VslDocument = buildVslDocument(segmentedElements, {
       viewport: viewport as { width: number; height: number },
       url: args.url || (await browser.evaluate(() => window.location.href)) as string,
+      title: title as string,
       timestamp: new Date().toISOString(),
     });
 

@@ -59,7 +59,7 @@ const VSL_TOOLS = [
   },
   {
     name: 'vsl_execute_action',
-    description: 'Выполнить действие над элементом VSL. Найдите элемент по id в snapshot (vsl_get_snapshot), затем вызовите это действие. Поддерживаемые действия: click (клик по элементу), type (ввод текста, требует value), fill (алиас type, ввод текста, требует value), scroll (прокрутка), select (выбор опции, требует value), hover, focus, blur, check, uncheck, press (нажатие клавиши). Пример: {action:click, target_id:btn_1} или {action:type, target_id:inp_2, value:hello@mail.com} или {action:fill, target_id:inp_2, value:hello@mail.com}.',
+    description: 'Выполнить действие над элементом VSL. Найдите элемент по id в snapshot (vsl_get_snapshot), затем вызовите это действие. Поддерживаемые действия: click (клик по элементу), type (ввод текста, требует value), fill (алиас type, ввод текста, требует value), scroll (прокрутка), select (выбор опции, требует value), hover, focus, blur, check, uncheck, press (нажатие клавиши), upload (загрузка файла, требует value — путь к файлу или список путей через запятую). Пример: {action:click, target_id:btn_1} или {action:type, target_id:inp_2, value:hello@mail.com} или {action:fill, target_id:inp_2, value:hello@mail.com} или {action:upload, target_id:file_input_0, value:/path/to/file.pdf}.',
     inputSchema: {
       type: 'object',
       properties: {

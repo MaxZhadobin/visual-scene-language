@@ -39,6 +39,11 @@ interface PlaywrightDownload {
   path(): Promise<string | null>;
 }
 
+/** Тип для Playwright FileChooser (динамический импорт). */
+interface PlaywrightFileChooser {
+  setFiles(files: string | string[]): Promise<void>;
+}
+
 /** Тип для Playwright Page (динамический импорт). */
 interface PlaywrightPage {
   goto(url: string, options?: { timeout?: number; waitUntil?: string }): Promise<unknown>;
@@ -50,6 +55,8 @@ interface PlaywrightPage {
   click(selector: string): Promise<void>;
   fill(selector: string, value: string): Promise<void>;
   selectOption(selector: string, value: string): Promise<string[]>;
+  setInputFiles(selector: string, files: string | string[]): Promise<void>;
+  waitForEvent(event: string, optionsOrPredicate?: { timeout?: number } | ((arg: unknown) => boolean)): Promise<PlaywrightFileChooser>;
   $eval(selector: string, fn: string | ((el: Element) => unknown)): Promise<unknown>;
   context(): PlaywrightBrowserContext;
 }
@@ -311,6 +318,57 @@ export class BrowserManager {
    */
   clearDownloads(): void {
     this.activeDownloads.clear();
+  }
+
+  /**
+   * Загружает файлы в <input type="file"> по CSS-селектору.
+   * Использует Playwright page.setInputFiles().
+   * Валидирует пути: абсолютные используются напрямую, относительные разрешаются
+   * относительно CWD с path traversal проверкой.
+   * @param selector - CSS-селектор input[type=file] элемента
+   * @param filePaths - Массив путей к файлам (абсолютные или относительные)
+   * @throws Error если путь выходит за допустимые границы или файл не существует
+   */
+  async uploadFile(selector: string, filePaths: string[]): Promise<void> {
+    const page = await this.getPage();
+    if (filePaths.length === 0) {
+      throw new Error('filePaths must contain at least one file path');
+    }
+
+    // Валидация и разрешение путей
+    const resolvedPaths: string[] = [];
+    for (const filePath of filePaths) {
+      const isAbsolute = path.isAbsolute(filePath);
+      if (isAbsolute) {
+        // Абсолютные пути — используем напрямую (пользователь явно указал)
+        resolvedPaths.push(filePath);
+      } else {
+        // Относительные пути — разрешаем относительно CWD
+        const resolved = path.resolve(process.cwd(), filePath);
+        // Path traversal: проверяем что путь не выходит за CWD
+        const cwd = path.resolve(process.cwd());
+        if (!resolved.startsWith(cwd + path.sep) && resolved !== cwd) {
+          throw new Error(`Path traversal detected: file path '${filePath}' resolves outside working directory '${cwd}'`);
+        }
+        resolvedPaths.push(resolved);
+      }
+    }
+
+    // Устанавливаем файлы через Playwright
+    await page.setInputFiles(selector, resolvedPaths.length === 1 ? resolvedPaths[0] : resolvedPaths);
+  }
+
+  /**
+   * Ожидает появления file chooser dialog (для кастомных file picker'ов).
+   * Возвращает FileChooser, через который можно установить файлы.
+   * @param timeout - Таймаут ожидания в мс (по умолчанию из config.downloadTimeout)
+   * @returns PlaywrightFileChooser для установки файлов
+   */
+  async waitForFileChooser(timeout?: number): Promise<PlaywrightFileChooser> {
+    const page = await this.getPage();
+    const waitTimeout = timeout ?? this.config.downloadTimeout ?? 60000;
+    const fileChooser = await page.waitForEvent('filechooser', { timeout: waitTimeout });
+    return fileChooser;
   }
 
   /**

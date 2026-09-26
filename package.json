@@ -1,6 +1,6 @@
 {
   "name": "@thinkingos/vsl-sdk",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Visual Scene Language (VSL) SDK — M1.1 Snapshot generation (DOM → VSL JSON)",
   "license": "SEE LICENSE IN LICENSE.txt",
   "engines": {

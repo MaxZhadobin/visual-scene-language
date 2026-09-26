@@ -63,6 +63,18 @@ export interface ElementCss {
   pointerEvents?: string;
   overflow?: string;
   height?: string;
+  /** Background color (computed) — для sty.bg в VslObject. */
+  backgroundColor?: string;
+  /** Text/foreground color (computed) — для sty.fg в VslObject. */
+  color?: string;
+  /** Border shorthand (computed) — для sty.border в VslObject. */
+  border?: string;
+  /** Border radius (computed) — для sty.radius в VslObject. */
+  borderRadius?: string;
+  /** Box shadow (computed) — для sty.shadow в VslObject. */
+  boxShadow?: string;
+  /** Font family (computed) — для sty.font.family в VslObject. */
+  fontFamily?: string;
 }
 
 /** Теги, которые никогда не отрисовываются визуально. */
@@ -131,6 +143,12 @@ const CSS_PROPERTIES: ReadonlyArray<[keyof ElementCss, string]> = [
   ['pointerEvents', 'pointer-events'],
   ['overflow', 'overflow'],
   ['height', 'height'],
+  ['backgroundColor', 'background-color'],
+  ['color', 'color'],
+  ['border', 'border'],
+  ['borderRadius', 'border-radius'],
+  ['boxShadow', 'box-shadow'],
+  ['fontFamily', 'font-family'],
 ];
 
 /**

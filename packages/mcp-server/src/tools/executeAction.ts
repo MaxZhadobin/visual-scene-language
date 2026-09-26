@@ -36,6 +36,7 @@ const VALID_ACTIONS = [
   'uncheck',
   'press',
   'download',
+  'upload',
 ] as const;
 
 /** Аргументы vsl_execute_action. */
@@ -48,7 +49,7 @@ export interface ExecuteActionArgs {
 /** Результат vsl_execute_action. */
 export interface ExecuteActionResult {
   status: 'success' | 'error';
-  data?: { action: string; target_id: string; success: boolean; download?: { downloadId: string; filename: string; url: string; status: 'pending' | 'completed' | 'cancelled' | 'failed' } };
+  data?: { action: string; target_id: string; success: boolean; download?: { downloadId: string; filename: string; url: string; status: 'pending' | 'completed' | 'cancelled' | 'failed' }; upload?: { selector: string; files: string[]; success: boolean } };
   error?: string;
 }
 
@@ -236,6 +237,38 @@ export async function handleExecuteAction(
           if (el) (el as HTMLElement).click();
         }, selector);
         break;
+      }
+
+      case 'upload': {
+        // Загрузка файлов в <input type="file">
+        // value содержит путь(и) к файлу(ам), разделённые запятой
+        if (!args.value) {
+          return {
+            status: 'error',
+            error: 'value is required for upload action (file path(s), comma-separated)',
+          };
+        }
+        const filePaths = args.value.split(',').map(p => p.trim()).filter(Boolean);
+        if (filePaths.length === 0) {
+          return {
+            status: 'error',
+            error: 'value must contain at least one file path',
+          };
+        }
+        await browser.uploadFile(selector, filePaths);
+        return {
+          status: 'success',
+          data: {
+            action: args.action,
+            target_id: args.target_id,
+            success: true,
+            upload: {
+              selector,
+              files: filePaths,
+              success: true,
+            },
+          },
+        };
       }
 
       default:

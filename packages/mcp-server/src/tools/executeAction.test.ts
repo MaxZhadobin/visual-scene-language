@@ -19,6 +19,10 @@
  *  - Выполнение действия focus
  *  - Выполнение действия blur
  *  - Обработка неизвестного действия
+ *  - Выполнение действия upload (с value — один файл)
+ *  - Выполнение действия upload (с value — несколько файлов)
+ *  - Выполнение действия upload (без value → ошибка)
+ *  - Выполнение действия upload (пустой value → ошибка)
  *  - Обработка исключений
  */
 
@@ -41,6 +45,7 @@ describe('vsl_execute_action', () => {
       getPage: jest.fn(),
       launch: jest.fn(),
       close: jest.fn(),
+      uploadFile: jest.fn(),
     } as unknown as jest.Mocked<BrowserManager>;
 
     mockSession = {
@@ -353,6 +358,73 @@ describe('vsl_execute_action', () => {
       expect(result.status).toBe('success');
       expect(result.data?.action).toBe('blur');
       expect(mockBrowser.evaluate).toHaveBeenCalled();
+    });
+
+    it('выполняет действие upload с одним файлом', async () => {
+      const result = await handleExecuteAction(
+        { action: 'upload', target_id: 'input_0', value: '/tmp/test.txt' },
+        mockBrowser,
+        mockSession,
+      );
+
+      expect(result.status).toBe('success');
+      expect(result.data?.action).toBe('upload');
+      expect(result.data?.target_id).toBe('input_0');
+      expect(result.data?.success).toBe(true);
+      expect(result.data?.upload).toEqual({
+        selector: expect.any(String),
+        files: ['/tmp/test.txt'],
+        success: true,
+      });
+      expect(mockBrowser.uploadFile).toHaveBeenCalled();
+    });
+
+    it('выполняет действие upload с несколькими файлами', async () => {
+      const result = await handleExecuteAction(
+        { action: 'upload', target_id: 'input_0', value: '/tmp/a.txt, /tmp/b.txt' },
+        mockBrowser,
+        mockSession,
+      );
+
+      expect(result.status).toBe('success');
+      expect(result.data?.upload?.files).toEqual(['/tmp/a.txt', '/tmp/b.txt']);
+      expect(mockBrowser.uploadFile).toHaveBeenCalled();
+    });
+
+    it('возвращает ошибку для upload без value', async () => {
+      const result = await handleExecuteAction(
+        { action: 'upload', target_id: 'input_0' },
+        mockBrowser,
+        mockSession,
+      );
+
+      expect(result.status).toBe('error');
+      expect(result.error).toContain('value is required for upload action');
+    });
+
+    it('возвращает ошибку для upload с пустым value', async () => {
+      const result = await handleExecuteAction(
+        { action: 'upload', target_id: 'input_0', value: '   ' },
+        mockBrowser,
+        mockSession,
+      );
+
+      expect(result.status).toBe('error');
+      expect(result.error).toContain('value must contain at least one file path');
+    });
+
+    it('обрабатывает ошибку uploadFile', async () => {
+      mockBrowser.uploadFile.mockRejectedValueOnce(new Error('Path traversal detected'));
+
+      const result = await handleExecuteAction(
+        { action: 'upload', target_id: 'input_0', value: '../../../etc/passwd' },
+        mockBrowser,
+        mockSession,
+      );
+
+      expect(result.status).toBe('error');
+      expect(result.error).toContain('vsl_execute_action failed');
+      expect(result.error).toContain('Path traversal detected');
     });
 
     it('возвращает ошибку для не реализованного действия (check, uncheck, press)', async () => {

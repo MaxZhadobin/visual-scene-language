@@ -391,4 +391,134 @@ describe('buildVslDocument: lazy text loading (M1.7, DEC-026)', () => {
     // HTML parser (jsdom) trims trailing whitespace, so compare trimmed
     expect(doc.text_blocks!['tb_000']).toBe(longText.trim());
   });
+
+describe('buildVslDocument: visual styles (sty field, DESIGN_SYSTEM §4.3)', () => {
+  afterEach(() => {
+    document.body.innerHTML = '';
+  });
+
+  it('элемент с background-color → sty.bg заполнено', () => {
+    const doc = buildFromHtml(
+      '<button style="background-color: rgb(255, 0, 0);" data-rect="0,0,100,40">OK</button>',
+    );
+    expect(doc.objects).toHaveLength(1);
+    const btn = doc.objects[0]!;
+    expect(btn.sty).toBeDefined();
+    expect(btn.sty!.bg).toBe('rgb(255, 0, 0)');
+  });
+
+  it('элемент с color → sty.fg заполнено', () => {
+    const doc = buildFromHtml(
+      '<button style="color: rgb(0, 0, 255);" data-rect="0,0,100,40">OK</button>',
+    );
+    const btn = doc.objects[0]!;
+    expect(btn.sty).toBeDefined();
+    expect(btn.sty!.fg).toBe('rgb(0, 0, 255)');
+  });
+
+  it('элемент с border → sty.border заполнено', () => {
+    const doc = buildFromHtml(
+      '<button style="border: 1px solid rgb(0, 0, 0);" data-rect="0,0,100,40">OK</button>',
+    );
+    const btn = doc.objects[0]!;
+    expect(btn.sty).toBeDefined();
+    expect(btn.sty!.border).toContain('1px');
+    expect(btn.sty!.border).toContain('solid');
+  });
+
+  it('элемент с border-radius → sty.radius заполнено', () => {
+    const doc = buildFromHtml(
+      '<button style="border-radius: 8px;" data-rect="0,0,100,40">OK</button>',
+    );
+    const btn = doc.objects[0]!;
+    expect(btn.sty).toBeDefined();
+    expect(btn.sty!.radius).toBe('8px');
+  });
+
+  it('элемент с box-shadow → sty.shadow заполнено', () => {
+    const doc = buildFromHtml(
+      '<button style="box-shadow: rgb(0, 0, 0) 0px 2px 4px;" data-rect="0,0,100,40">OK</button>',
+    );
+    const btn = doc.objects[0]!;
+    expect(btn.sty).toBeDefined();
+    expect(btn.sty!.shadow).toContain('0px 2px 4px');
+  });
+
+  it('элемент с font-family → sty.font.family заполнено', () => {
+    const doc = buildFromHtml(
+      '<button style="font-family: Arial, sans-serif;" data-rect="0,0,100,40">OK</button>',
+    );
+    const btn = doc.objects[0]!;
+    expect(btn.sty).toBeDefined();
+    expect(btn.sty!.font).toBeDefined();
+    expect(btn.sty!.font!.family).toContain('Arial');
+  });
+
+  it('фильтрация: transparent background → sty.bg НЕ заполнено', () => {
+    const doc = buildFromHtml(
+      '<button style="background-color: transparent;" data-rect="0,0,100,40">OK</button>',
+    );
+    const btn = doc.objects[0]!;
+    expect(btn.sty?.bg).toBeUndefined();
+  });
+
+  it('фильтрация: black color (rgb(0, 0, 0)) → sty.fg НЕ заполнено', () => {
+    const doc = buildFromHtml(
+      '<button style="color: rgb(0, 0, 0);" data-rect="0,0,100,40">OK</button>',
+    );
+    const btn = doc.objects[0]!;
+    expect(btn.sty?.fg).toBeUndefined();
+  });
+
+  it('фильтрация: border none → sty.border НЕ заполнено', () => {
+    const doc = buildFromHtml(
+      '<div role="button" style="border: none;" data-rect="0,0,100,40">OK</div>',
+    );
+    const btn = doc.objects[0]!;
+    expect(btn.sty?.border).toBeUndefined();
+  });
+
+  it('фильтрация: border-radius 0px → sty.radius НЕ заполнено', () => {
+    const doc = buildFromHtml(
+      '<button style="border-radius: 0px;" data-rect="0,0,100,40">OK</button>',
+    );
+    const btn = doc.objects[0]!;
+    expect(btn.sty?.radius).toBeUndefined();
+  });
+
+  it('фильтрация: box-shadow none → sty.shadow НЕ заполнено', () => {
+    const doc = buildFromHtml(
+      '<button style="box-shadow: none;" data-rect="0,0,100,40">OK</button>',
+    );
+    const btn = doc.objects[0]!;
+    expect(btn.sty?.shadow).toBeUndefined();
+  });
+
+  it('элемент без визуальных стилей → sty undefined (экономия JSON)', () => {
+    const doc = buildFromHtml('<div role="button" data-rect="0,0,100,40">OK</div>');
+    const btn = doc.objects[0]!;
+    expect(btn.sty).toBeUndefined();
+  });
+
+  it('несколько стилей на одном элементе → все заполнены', () => {
+    const doc = buildFromHtml(
+      '<button style="background-color: rgb(255, 0, 0); color: rgb(255, 255, 255); border-radius: 4px;" data-rect="0,0,100,40">OK</button>',
+    );
+    const btn = doc.objects[0]!;
+    expect(btn.sty).toBeDefined();
+    expect(btn.sty!.bg).toBe('rgb(255, 0, 0)');
+    expect(btn.sty!.fg).toBe('rgb(255, 255, 255)');
+    expect(btn.sty!.radius).toBe('4px');
+  });
+
+  it('обратно-совместимо: документы без sty валидны (optional поле)', () => {
+    const doc = buildFromHtml('<div role="button" data-rect="0,0,100,40">OK</div>');
+    const json = JSON.stringify(doc);
+    const parsed = JSON.parse(json) as VslDocument;
+    expect(parsed.objects[0]!.sty).toBeUndefined();
+    // Документ валиден без sty
+    expect(parsed.vsl_version).toBe(VSL_VERSION);
+  });
+});
+
 });

@@ -18,7 +18,7 @@
  * (toolbar/list/grid/form_field/tab_bar/layout) анализируют t детей.
  */
 
-import type { ExtractedElement, Rect } from '../capture/domExtractor';
+import type { ElementCss, ExtractedElement, Rect } from '../capture/domExtractor';
 import type { VslFragmentMeta, VslState, VslType } from '../types/vsl';
 import { resolveLevel1Type } from './level1';
 import { resolveAriaRoleType, resolveSt } from './level2';
@@ -37,6 +37,8 @@ export interface SegmentedElement {
   txt: string | null;
   /** Состояние из ARIA (checked/expanded/disabled) или null. */
   st: VslState | null;
+  /** CSS-подмножество для визуальных стилей (передаётся в Builder для sty). */
+  css?: ElementCss;
   ch: SegmentedElement[];
   /** Ссылка на визуальный фрагмент (заполняется enrichWithVision, T1.5.4). */
   vf?: string;
@@ -51,17 +53,22 @@ export function isAriaHidden(attributes: Record<string, string>): boolean {
 
 function segmentOne(el: ExtractedElement): SegmentedElement {
   const { attributes } = el;
+  // Специальная проверка для input[type=file] → file_input
+  // (не ломает контракт resolveLevel1Type, который принимает только tag)
+  const isFileInput = el.tag === 'input' && attributes['type'] === 'file';
   return {
     tag: el.tag,
     indexPath: el.indexPath,
     rect: el.rect,
     attributes,
-    t:
-      resolveLevel1Type(el.tag) ??
-      resolveAriaRoleType(attributes['role']) ??
-      resolveLevel3Type(el.css, attributes),
+    t: isFileInput
+      ? 'file_input'
+      : (resolveLevel1Type(el.tag) ??
+         resolveAriaRoleType(attributes['role']) ??
+         resolveLevel3Type(el.css, attributes)),
     txt: attributes['aria-label'] ?? el.text,
     st: resolveSt(attributes),
+    css: el.css,
     ch: [],
   };
 }

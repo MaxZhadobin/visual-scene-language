@@ -102,11 +102,25 @@ export VSL_VISION_MODEL="meta-llama/Llama-Vision"
 Выполнить действие над элементом VSL.
 
 **Параметры:**
-- `action` (string, required) — имя действия: `click`, `type`, `fill` (алиас `type`), `scroll`, `select`, `hover`, `focus`, `blur`, `check`, `uncheck`, `press`
+- `action` (string, required) — имя действия: `click`, `type`, `fill` (алиас `type`), `scroll`, `select`, `hover`, `focus`, `blur`, `check`, `uncheck`, `press`, `upload` (загрузка файла, требует `value` — путь к файлу или список путей через запятую)
 - `target_id` (string, required) — ID элемента в VSL JSON
-- `value` (string, optional) — значение для действия (текст для `type`, опция для `select`)
+- `value` (string, optional) — значение для действия (текст для `type`, опция для `select`, путь к файлу для `upload`)
 
 **Возвращает:** результат выполнения действия.
+
+**Пример загрузки файла:**
+
+
+Agent: vsl_execute_action(action="upload", target_id="file_input_0", value="/path/to/document.pdf")
+→ { success: true, data: { action: "upload", upload: { selector: "#file_input_0", files: ["/path/to/document.pdf"], success: true } } }
+
+
+Для загрузки нескольких файлов (если input имеет `multiple` атрибут):
+
+
+Agent: vsl_execute_action(action="upload", target_id="file_input_1", value="/path/file1.jpg, /path/file2.jpg")
+→ { success: true, data: { upload: { files: ["/path/file1.jpg", "/path/file2.jpg"], success: true } } }
+
 
 **Lazy Navigation (DEC-028):**
 Перед выполнением действия система автоматически проверяет, находится ли браузер на URL из текущего snapshot. Если нет — автоматически навигирует на нужный URL. Это позволяет агенту:

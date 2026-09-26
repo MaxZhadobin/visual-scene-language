@@ -19,6 +19,7 @@
  */
 
 import type { SegmentedElement } from '../segmentation/segmenter';
+import type { ElementCss } from '../capture/domExtractor';
 import {
   VSL_VERSION,
   type VisualFragment,
@@ -27,6 +28,7 @@ import {
   type VslDocument,
   type VslObject,
   type VslState,
+  type VslStyle,
   type VslType,
 } from '../types/vsl';
 
@@ -82,6 +84,8 @@ function defaultActions(
       return ['click', 'select'];
     case 'textarea':
       return ['click', 'type', 'clear'];
+    case 'file_input':
+      return ['click', 'upload'];
     default:
       return undefined;
   }
@@ -96,6 +100,64 @@ function baseSemanticScore(el: SegmentedElement): number {
   if (el.txt) score += 1;
   return score;
 }
+
+/**
+ * Извлекает визуальные стили из CSS-подмножества для VslObject.
+ * Возвращает undefined, если нет значимых стилей (экономия JSON).
+ * Фильтрует дефолтные значения: transparent, none, 0px, rgb(0,0,0).
+ */
+function extractVisualStyles(css?: ElementCss): VslStyle | undefined {
+  if (!css) return undefined;
+
+  const style: VslStyle = {};
+  let hasContent = false;
+
+  // Background (пропускаем transparent и rgba(0,0,0,0))
+  if (
+    css.backgroundColor &&
+    css.backgroundColor !== 'transparent' &&
+    !css.backgroundColor.includes('rgba(0, 0, 0, 0)')
+  ) {
+    style.bg = css.backgroundColor;
+    hasContent = true;
+  }
+
+  // Foreground (пропускаем черный по умолчанию) — ВСЕГДА включаем, если есть
+  if (css.color && css.color !== 'rgb(0, 0, 0)') {
+    style.fg = css.color;
+    hasContent = true;
+  }
+
+  // Border (пропускаем none и 0px) — ВСЕГДА включаем, если есть
+  if (css.border && css.border !== 'none' && !css.border.startsWith('0px')) {
+    style.border = css.border;
+    hasContent = true;
+  }
+
+  // Border radius (пропускаем 0px) — ВСЕГДА включаем, если есть
+  if (css.borderRadius && css.borderRadius !== '0px') {
+    style.radius = css.borderRadius;
+    hasContent = true;
+  }
+
+  // Box shadow (пропускаем none) — ВСЕГДА включаем, если есть
+  if (css.boxShadow && css.boxShadow !== 'none') {
+    style.shadow = css.boxShadow;
+    hasContent = true;
+  }
+
+  // Font (только если есть family/size/weight) — ВСЕГДА включаем, если есть
+  if (css.fontFamily || css.fontSize || css.fontWeight) {
+    style.font = {};
+    if (css.fontFamily) style.font.family = css.fontFamily;
+    if (css.fontSize) style.font.size = css.fontSize;
+    if (css.fontWeight) style.font.weight = css.fontWeight;
+    hasContent = true;
+  }
+
+  return hasContent ? style : undefined;
+}
+
 
 function toVslObject(
   el: SegmentedElement,
@@ -129,6 +191,13 @@ function toVslObject(
   if (includedChildren.length > 0) object.ch = includedChildren;
   if (el.vf !== undefined) object.vf = el.vf;
   if (el.vf_meta !== undefined) object.vf_meta = el.vf_meta;
+  const sty = extractVisualStyles(el.css);
+  if (sty !== undefined) object.sty = sty;
+  // file_input: извлекаем accept и multiple атрибуты
+  if (t === 'file_input') {
+    if (el.attributes['accept'] !== undefined) object.accept = el.attributes['accept'];
+    if (el.attributes['multiple'] !== undefined) object.multiple = true;
+  }
   return object;
 }
 

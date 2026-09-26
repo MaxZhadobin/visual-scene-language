@@ -9,6 +9,7 @@
 export type VslType =
   | 'button'
   | 'input'
+  | 'file_input'
   | 'link'
   | 'nav'
   | 'header'
@@ -49,6 +50,30 @@ export interface VslFragmentMeta {
   size?: [number, number];
   hash?: string;
   cached_at?: string;
+}
+
+/**
+ * Визуальные стили объекта VSL (DESIGN_SYSTEM.md §4.3).
+ * Optional: только для визуально значимых элементов.
+ * Все значения — computed styles в момент snapshot.
+ */
+export interface VslStyle {
+  /** Background color (computed). */
+  bg?: string;
+  /** Text/foreground color (computed). */
+  fg?: string;
+  /** Border shorthand (computed). */
+  border?: string;
+  /** Border radius (computed). */
+  radius?: string;
+  /** Box shadow (computed). */
+  shadow?: string;
+  /** Font properties. */
+  font?: {
+    family?: string;
+    size?: string;
+    weight?: string;
+  };
 }
 
 /**
@@ -114,6 +139,12 @@ export interface VslObject {
   vf?: string;
   /** Метаданные фрагмента (§4.4). */
   vf_meta?: VslFragmentMeta;
+  /** Визуальные стили (DESIGN_SYSTEM.md §4.3). Optional: только для визуально значимых элементов. */
+  sty?: VslStyle;
+  /** Accept attribute для file_input (например, '.pdf,.docx'). */
+  accept?: string;
+  /** Multiple attribute для file_input — разрешена загрузка нескольких файлов. */
+  multiple?: boolean;
 }
 
 export interface VslDocument {
