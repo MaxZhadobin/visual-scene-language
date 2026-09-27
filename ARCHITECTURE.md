@@ -1751,10 +1751,10 @@ DOM (веб-страница)
 |------|----------|-----------|------------|
 | `vsl_get_snapshot` | Получить текущий VSL snapshot | `url?` (опционально) | VSL JSON |
 | `vsl_get_diff` | Получить только изменения | — | Diff JSON |
-| `vsl_execute_action` | Выполнить действие | `action`, `target_id`, `value?` | `{ success: boolean }` |
+| `vsl_execute_action` | Выполнить действие | `action`, `target_id`, `value?` | `{ success: boolean }`. **Стабилизация DOM**: 100ms wait после click/type/scroll перед извлечением состояния |
 | `vsl_navigate` | Перейти по URL | `url` | `{ success: boolean }` |
 | `vsl_clear_cache` | Сбросить кэш | — | `{ success: boolean }` |
-| `vsl_get_visual` | Получить visual fragment | `element_id` | Base64 WebP image |
+| `vsl_get_visual` | Получить visual fragment | `element_id` | Base64 WebP image. **ElementHandle screenshot**: использует `elementHandle.screenshot()` для корректного скриншота на проскролленных страницах |
 
 ### 15.3 REST API (Phase 2+)
 

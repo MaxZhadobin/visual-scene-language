@@ -168,7 +168,7 @@ export class BrowserManager {
     const page = await this.getPage();
     await page.goto(url, {
       timeout: this.config.navigationTimeout,
-      waitUntil: 'networkidle',
+      waitUntil: 'domcontentloaded',
     });
   }
 

@@ -48,7 +48,7 @@ const VSL_TOOLS = [
         detail_level: {
           type: 'string',
           enum: ['low', 'medium', 'high'],
-          description: "Уровень детализации snapshot. 'low': только интерактивные элементы (кнопки, ссылки, инпуты). 'medium': интерактивные + контейнеры. 'high': все объекты (полный DOM). Default: 'high'.",
+          description: "Уровень детализации snapshot. 'low': только интерактивные элементы (кнопки, ссылки, инпуты). 'medium': интерактивные + контейнеры (default). 'high': все объекты (полный DOM). Default: 'medium'.",
         },
         ttl: {
           type: 'number',
@@ -67,7 +67,7 @@ const VSL_TOOLS = [
   },
   {
     name: 'vsl_execute_action',
-    description: 'Выполнить действие над элементом VSL. Найдите элемент по id в snapshot (vsl_get_snapshot), затем вызовите это действие. Поддерживаемые действия: click (клик по элементу), type (ввод текста, требует value), fill (алиас type, ввод текста, требует value), scroll (прокрутка), select (выбор опции, требует value), hover, focus, blur, check, uncheck, press (нажатие клавиши), upload (загрузка файла, требует value — путь к файлу или список путей через запятую). Пример: {action:click, target_id:btn_1} или {action:type, target_id:inp_2, value:hello@mail.com} или {action:fill, target_id:inp_2, value:hello@mail.com} или {action:upload, target_id:file_input_0, value:/path/to/file.pdf}. Параметр return_state=true возвращает diff и snapshot после действия.',
+    description: 'Выполнить действие над элементом VSL. Найдите элемент по id в snapshot (vsl_get_snapshot), затем вызовите это действие. Поддерживаемые действия: click (клик по элементу), type (ввод текста, требует value), fill (алиас type, ввод текста, требует value), scroll (прокрутка, формат: "up", "down", "left", "right" или "dir:amount", например "down:300"), select (выбор опции, требует value), hover, focus, blur, check, uncheck, press (нажатие клавиши на клавиатуре, требует value — название клавиши, например "Enter", "Tab", "Escape", "ArrowDown", "ArrowUp", "Space", "Backspace". Используется для отправки форм через Enter, навигации через Tab, закрытия модалок через Escape и т.д.), upload (загрузка файла, требует value — путь к файлу или список путей через запятую). Пример: {action:click, target_id:btn_1} или {action:type, target_id:inp_2, value:hello@mail.com} или {action:fill, target_id:inp_2, value:hello@mail.com} или {action:press, target_id:inp_1, value:Enter} или {action:upload, target_id:file_input_0, value:/path/to/file.pdf}. Параметр return_state=true возвращает diff и snapshot после действия.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -278,6 +278,14 @@ export function registerTools(server: Server, config: McpServerConfig, sessionMa
             ],
             isError: true,
           };
+      }
+
+      // Если результат уже MCP-compliant (имеет поле content с массивом), возвращаем напрямую
+      if (result && typeof result === 'object' && 'content' in result && Array.isArray((result as { content: unknown[] }).content)) {
+        return result as {
+          content: Array<{ type: string; data?: string; text?: string; mimeType?: string }>;
+          isError?: boolean;
+        };
       }
 
       return {

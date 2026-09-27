@@ -14,6 +14,7 @@ import { describe, it, expect, beforeEach, jest } from '@jest/globals';
 import { registerResources } from './index.js';
 import type { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import type { ServerSession } from '../session/serverSession.js';
+import type { SessionManager } from '../session/sessionManager.js';
 import type { McpServerConfig } from '../config/loader.js';
 
 describe('MCP Resources', () => {
@@ -22,6 +23,7 @@ describe('MCP Resources', () => {
     handlers: Array<{ schema: unknown; handler: (request: unknown) => Promise<unknown> }>;
   };
   let mockSession: jest.Mocked<ServerSession>;
+  let mockSessionManager: jest.Mocked<SessionManager>;
   let mockConfig: McpServerConfig;
 
   beforeEach(() => {
@@ -44,12 +46,27 @@ describe('MCP Resources', () => {
       setOnSnapshotChange: jest.fn(),
     } as unknown as jest.Mocked<ServerSession>;
 
+    // Mock SessionManager — возвращает {session: mockSession} из getSession()
+    mockSessionManager = {
+      getDefaultSessionId: jest.fn().mockReturnValue('default'),
+      getSession: jest.fn().mockReturnValue({
+        sessionId: 'default',
+        session: mockSession,
+        browser: null,
+        createdAt: Date.now(),
+        lastAccessedAt: Date.now(),
+      }),
+      createSession: jest.fn(),
+      closeSession: jest.fn(),
+      closeAll: jest.fn(),
+    } as unknown as jest.Mocked<SessionManager>;
+
     mockConfig = {
       vision: { provider: 'openai', model: 'gpt-4o-mini-vision' },
       browser: { headless: true, navigationTimeout: 30000 },
     } as unknown as McpServerConfig;
 
-    registerResources(mockServer as unknown as Server, mockConfig, mockSession);
+    registerResources(mockServer as unknown as Server, mockConfig, mockSessionManager);
   });
 
   it('регистрирует handlers для ListResources и ReadResource', () => {

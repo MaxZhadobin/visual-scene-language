@@ -213,6 +213,32 @@ VSL поддерживает полный набор действий:
 
 → Подробнее: [ARCHITECTURE.md §8](./ARCHITECTURE.md)
 
+### 4.6 VSL ID Format
+
+VSL ID — уникальный идентификатор элемента в VSL JSON. Формат:
+
+`${tag}_${indexPath.join('_')}`
+
+где:
+- **tag** — тип элемента (button, input, link, file_input, custom_widget и т.д.)
+- **indexPath** — массив индексов, описывающих путь от корня DOM-дерева до элемента
+
+**Примеры:**
+- `button_0_1` → { tag: 'button', indexPath: [0, 1] }
+- `file_input_0_1` → { tag: 'file_input', indexPath: [0, 1] }
+- `custom_widget_2_3_4` → { tag: 'custom_widget', indexPath: [2, 3, 4] }
+- `h1_0_1` → { tag: 'h1', indexPath: [0, 1] }
+
+**Важно:** Некоторые теги содержат underscore (file_input, dropdown_toggle, scrollable_container, form_field, tab_bar, custom_widget). Функция `parseVslId()` корректно разделяет tag и indexPath, используя regex, который гарантирует, что underscore в tag части всегда предшествует буквенному сегменту (не числовому).
+
+**Использование:**
+- VSL ID записывается в DOM-атрибут `data-vsl-id` для последующего взаимодействия через `execute_action`
+- Функция `parseVslId()` (packages/mcp-server/src/utils/vslIdParser.ts) парсит ID и возвращает структуру `{ tag, indexPath }`
+- Inline-копия `parseVslId()` используется в `getSnapshot.ts` внутри `browser.evaluate()` для обхода DOM-дерева и установки атрибутов `data-vsl-id`
+
+**Тестовое покрытие:** 27 юнит-тестов в `vslIdParser.test.ts` покрывают все сценарии: простые теги, теги с underscore, различные глубины indexPath, невалидные ID и edge cases. Покрытие: 100% (Statements, Branches, Functions, Lines).
+
+
 ---
 
 ## 5. Architecture Overview
@@ -515,10 +541,10 @@ MCP (Model Context Protocol) Server — рекомендуемый способ 
 |------|----------|
 | `vsl_get_snapshot` | Получить VSL snapshot текущего экрана. Параметры: `url` (опционально), `detail_level` (low/medium/high, default: high), `ttl` (кэш в мс, default: 5000). Поддерживает lazy text loading (DEC-026): длинные тексты >200 символов заменяются на `txt_preview` + `txt_ref`, полные тексты в `text_blocks`. Возвращает метрики: `json_size_bytes`, `estimated_tokens`, `object_count`, `execution_time_ms` |
 | `vsl_get_diff` | Получить только изменения с последнего snapshot. Возвращает метрики производительности |
-| `vsl_execute_action` | Выполнить действие (click, type, scroll, navigate, и др.). Lazy Navigation (DEC-028): автоматически навигирует браузер на URL из snapshot. **Автоматическое создание snapshot**: если в DOM нет атрибутов `data-vsl-id` (например, после `vsl_read_page`), автоматически создаёт snapshot для инжекта атрибутов — не нужно вручную вызывать `vsl_get_snapshot` перед действием. Параметр `return_state: true` возвращает **diff И полный snapshot** после действия (удобно для отслеживания изменений). Валидация input параметров (DEC-030) |
+| `vsl_execute_action` | Выполнить действие (click, type, scroll, navigate, и др.). Lazy Navigation (DEC-028): автоматически навигирует браузер на URL из snapshot. **Автоматическое создание snapshot**: если в DOM нет атрибутов `data-vsl-id` (например, после `vsl_read_page`), автоматически создаёт snapshot для инжекта атрибутов — не нужно вручную вызывать `vsl_get_snapshot` перед действием. Параметр `return_state: true` возвращает **diff И полный snapshot** после действия (удобно для отслеживания изменений). **Стабилизация DOM**: после выполнения действия (click/type/scroll) ожидает 100ms для завершения async операций и рендеринга перед извлечением состояния. Валидация input параметров (DEC-030). **Graceful error handling (DEC-031)**: при сбое извлечения состояния после действия возвращает `warning` (root level) и `state.error` вместо молчаливого `{status: success}` без данных |
 | `vsl_cache_clear` | Очистить кэш snapshots. Возвращает метрики производительности |
-| `vsl_navigate` | Navigate to URL. Возвращает метрики производительности |
-| `vsl_get_visual` | Получить визуальный фрагмент (Base64 WebP) по ID элемента. Параметр `auto_refresh: true` автоматически обновляет snapshot перед поиском (решает проблему устаревших data-vsl-id). **Автоскролл**: параметр `auto_scroll` (default: `true`) — автоматически прокручивает страницу к элементу если он вне viewport, использует `scrollIntoView({ block: 'center', inline: 'center' })`. Возвращает `scroll_info: { scrolled, scroll_offset }` если был выполнен автоскролл. Улучшенная обработка ошибок с `possible_causes` и `suggestions` |
+| `vsl_navigate` | Navigate to URL. Возвращает метрики производительности. **Graceful error handling (DEC-031)**: при сбое извлечения snapshot после навигации возвращает `warning` поле с описанием ошибки вместо молчаливого `{status: success}` без snapshot |
+| `vsl_get_visual` | Получить визуальный фрагмент (Base64 WebP) по ID элемента. Параметр `auto_refresh: true` автоматически обновляет snapshot перед поиском (решает проблему устаревших data-vsl-id). **Автоскролл**: параметр `auto_scroll` (default: `true`) — автоматически прокручивает страницу к элементу если он вне viewport, использует `scrollIntoView({ block: 'center', inline: 'center' })`. Возвращает `scroll_info: { scrolled, scroll_offset }` если был выполнен автоскролл. **ElementHandle screenshot**: использует `elementHandle.screenshot()` вместо `page.screenshot({clip})` для корректного скриншота элементов на проскролленных страницах. Улучшенная обработка ошибок с `possible_causes` и `suggestions` |
 | `vsl_get_text_block` | Получить полный текст по `txt_ref` из lazy text loading (M1.7, DEC-026). Используется когда текст >200 символов заменён на `txt_preview` + `txt_ref` в snapshot |
 | `vsl_read_page` | Прочитать веб-страницу с автоматической стратегией: HTTP-first для статики, автопереключение на Render для SPA (M1.6, DEC-024). Валидация input параметров |
 | `vsl_download` | Управление загрузкой файлов: клик по элементу (`target_id`) или прямое скачивание по URL (`value`), ожидание завершения, сохранение в `save_path` (M1.5). Валидация input параметров |

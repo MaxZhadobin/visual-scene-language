@@ -53,13 +53,18 @@ describe('vsl_get_snapshot', () => {
   beforeEach(() => {
     domMocks = setupGlobalDomMocks();
 
+    // Mock page object with waitForTimeout for DOM stabilization (Fix 3)
+    const mockPage = {
+      waitForTimeout: jest.fn().mockResolvedValue(undefined),
+    };
+
     mockBrowser = {
       isAvailable: jest.fn(),
       navigate: jest.fn(),
       evaluate: jest.fn(),
       getContent: jest.fn(),
       screenshot: jest.fn(),
-      getPage: jest.fn(),
+      getPage: jest.fn().mockReturnValue(mockPage),
       launch: jest.fn(),
       close: jest.fn(),
     } as unknown as jest.Mocked<BrowserManager>;
@@ -330,4 +335,81 @@ describe('vsl_get_snapshot', () => {
     expect(Array.isArray(vslObjects)).toBe(true);
     expect(vslObjects.length).toBeGreaterThan(0);
   });
+
+  it('по умолчанию использует detail_level = medium (фильтрует не-interactive и не-container элементы)', async () => {
+    const mockElements = createMockExtractedElements();
+    const mockDoc = createMockVslDocument();
+    // Добавляем span — не входит ни в INTERACTIVE_TYPES, ни в CONTAINER_TYPES
+    (mockDoc.objects as Array<Record<string, unknown>>).push({
+      id: 'span_1',
+      t: 'span',
+      txt: 'Some text',
+      bbox: [200, 200, 50, 20],
+    });
+    mockSession.snapshotFromElements.mockReturnValue(mockDoc as never);
+
+    mockBrowser.isAvailable.mockResolvedValue(true);
+    mockBrowser.evaluate
+      .mockResolvedValueOnce(mockElements as never)
+      .mockResolvedValueOnce({ width: 1280, height: 800 } as never)
+      .mockResolvedValueOnce('https://test.com' as never)
+      .mockResolvedValueOnce('Test Page' as never)
+      .mockResolvedValueOnce(undefined as never);
+
+    // Вызываем БЕЗ detail_level — должен использоваться default 'medium'
+    const result = await handleGetSnapshot({ ttl: 0 }, mockBrowser, mockSession, mockConfig);
+
+    expect(result.status).toBe('success');
+    const vslDoc = result.data as Record<string, unknown>;
+    const objects = vslDoc.objects as Array<Record<string, unknown>>;
+
+    // span_1 должен быть отфильтрован при 'medium' (не interactive и не container)
+    const hasSpan = objects.some(obj => obj.id === 'span_1');
+    expect(hasSpan).toBe(false);
+
+    // div_0 должен остаться (container type)
+    const hasDiv = objects.some(obj => obj.id === 'div_0');
+    expect(hasDiv).toBe(true);
+  });
+
+  it('явное указание detail_level: high возвращает все объекты без фильтрации', async () => {
+    const mockElements = createMockExtractedElements();
+    const mockDoc = createMockVslDocument();
+    // Добавляем span — не входит ни в INTERACTIVE_TYPES, ни в CONTAINER_TYPES
+    (mockDoc.objects as Array<Record<string, unknown>>).push({
+      id: 'span_1',
+      t: 'span',
+      txt: 'Some text',
+      bbox: [200, 200, 50, 20],
+    });
+    mockSession.snapshotFromElements.mockReturnValue(mockDoc as never);
+
+    mockBrowser.isAvailable.mockResolvedValue(true);
+    mockBrowser.evaluate
+      .mockResolvedValueOnce(mockElements as never)
+      .mockResolvedValueOnce({ width: 1280, height: 800 } as never)
+      .mockResolvedValueOnce('https://test.com' as never)
+      .mockResolvedValueOnce('Test Page' as never)
+      .mockResolvedValueOnce(undefined as never);
+
+    // Вызываем С detail_level: 'high' — фильтрация отключена
+    const result = await handleGetSnapshot(
+      { ttl: 0, detail_level: 'high' },
+      mockBrowser,
+      mockSession,
+      mockConfig,
+    );
+
+    expect(result.status).toBe('success');
+    const vslDoc = result.data as Record<string, unknown>;
+    const objects = vslDoc.objects as Array<Record<string, unknown>>;
+
+    // span_1 должен остаться (high = без фильтрации)
+    const hasSpan = objects.some(obj => obj.id === 'span_1');
+    expect(hasSpan).toBe(true);
+
+    // Оба объекта верхнего уровня на месте (div_0 + span_1)
+    expect(objects.length).toBe(2);
+  });
+
 });

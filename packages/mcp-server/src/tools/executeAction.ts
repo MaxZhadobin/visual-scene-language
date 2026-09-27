@@ -25,6 +25,7 @@ import type { SnapshotInput } from '@thinkingos/vsl-sdk';
 
 import { computeToolMetrics } from '../utils/metrics.js';
 import { extractDomTreeInBrowser } from './getSnapshot.js';
+import { injectVslIdsIntoDom } from '../utils/injectVslIds.js';
 
 /** Поддерживаемые действия. */
 const VALID_ACTIONS = [
@@ -71,11 +72,22 @@ export interface ExecuteActionResult {
       diff?: unknown;
       /** Полный snapshot (если был первый вызов или URL изменился). */
       snapshot?: unknown;
+      /** Ошибка извлечения состояния (если getStateAfterAction упал). */
+      error?: string;
     };
   };
   error?: string;
+  /** Предупреждение о проблемах при извлечении состояния страницы. */
+  warning?: string;
   /** Метрики производительности (DEC-029). */
   metadata?: { json_size_bytes: number; estimated_tokens: number; execution_time_ms: number; timestamp: string };
+}
+
+/** Результат получения состояния страницы после действия. */
+export interface StateAfterAction {
+  diff?: unknown;
+  snapshot?: unknown;
+  error?: string;
 }
 
 /**
@@ -86,7 +98,7 @@ async function getStateAfterAction(
   session: ServerSession,
   browser: BrowserManager,
   url: string,
-): Promise<{ diff?: unknown; snapshot?: unknown } | undefined> {
+): Promise<StateAfterAction> {
   try {
     // Извлечь обновлённый DOM
     const elements = await browser.evaluate(extractDomTreeInBrowser);
@@ -107,11 +119,14 @@ async function getStateAfterAction(
     const diff = session.getDiff();
     // Получить полный snapshot
     const snapshot = session.getSnapshot();
+    // Inject data-vsl-id attributes into DOM for subsequent actions
+    await injectVslIdsIntoDom(browser, snapshot.objects);
     return { diff, snapshot };
   } catch (error) {
-    // Если не удалось получить состояние, возвращаем undefined
-    console.warn('Failed to get state after action:', error);
-    return undefined;
+    // Если не удалось получить состояние, возвращаем ошибку
+    const errorMessage = `Failed to get state after action: ${error instanceof Error ? error.message : String(error)}`;
+    console.error('[vsl_execute_action]', errorMessage, error);
+    return { error: errorMessage };
   }
 }
 
@@ -161,13 +176,28 @@ export async function handleExecuteAction(
       };
     }
 
-    // Валидация value для scroll (DEC-030)
+    // Валидация value для scroll (DEC-030 + expand scroll API)
     if (args.action === 'scroll' && args.value !== undefined) {
-      const VALID_SCROLL_VALUES = ['up', 'down'];
-      if (!VALID_SCROLL_VALUES.includes(args.value)) {
+      const SCROLL_DIRECTIONS = new Set(['up', 'down', 'left', 'right']);
+      const parts = args.value.trim().split(':');
+      const dir = parts[0] ?? '';
+      const amountPart = parts[1];
+      if (!SCROLL_DIRECTIONS.has(dir)) {
         return {
           status: 'error',
-          error: 'Invalid scroll value: ' + args.value + '. Valid values: ' + VALID_SCROLL_VALUES.join(', '),
+          error: `Invalid scroll direction: "${dir}". Valid: up, down, left, right. Optional amount: "down:300"`,
+        };
+      }
+      if (parts.length > 2) {
+        return {
+          status: 'error',
+          error: 'Invalid scroll value format. Use "dir" or "dir:amount" (e.g. "down:300")',
+        };
+      }
+      if (amountPart !== undefined && !/^\d+(?:\.\d+)?$/.test(amountPart)) {
+        return {
+          status: 'error',
+          error: `Invalid scroll amount: "${amountPart}". Must be a positive number`,
         };
       }
     }
@@ -239,12 +269,14 @@ export async function handleExecuteAction(
     const selector = `[data-vsl-id="${args.target_id}"], #${args.target_id}, .${args.target_id}`;
 
     // 5. Выполняем действие
+    const page = await browser.getPage();
+    
     switch (args.action) {
       case 'click':
-        await browser.evaluate((sel: string) => {
-          const el = document.querySelector(sel);
-          if (el) (el as HTMLElement).click();
-        }, selector);
+        // Используем Playwright-native click для автоматического ожидания навигации
+        await page.click(selector, { timeout: 5000 });
+        // Ждём стабилизации DOM после клика
+        await page.waitForTimeout(100);
         break;
 
       case 'fill':
@@ -255,27 +287,24 @@ export async function handleExecuteAction(
             error: 'value is required for type action',
           };
         }
-        await browser.evaluate(({ sel, val }: { sel: string; val: string }) => {
-          const el = document.querySelector(sel) as HTMLInputElement;
-          if (el) {
-            el.value = val;
-            // Dispatch input+change events for React compatibility (AC[2]):
-            // React controlled components update only via events, not direct .value changes
-            el.dispatchEvent(new Event('input', { bubbles: true }));
-            el.dispatchEvent(new Event('change', { bubbles: true }));
-          }
-        }, { sel: selector, val: args.value });
+        // Используем Playwright-native fill для автоматического ожидания и событий
+        await page.fill(selector, args.value, { timeout: 5000 });
         break;
 
-      case 'scroll':
-        await browser.evaluate((val: string) => {
-          if (val === 'down') {
-            window.scrollBy(0, 500);
-          } else if (val === 'up') {
-            window.scrollBy(0, -500);
-          }
-        }, args.value || 'down');
+      case 'scroll': {
+        const DEFAULT_SCROLL_AMOUNT = 500;
+        const scrollValue = args.value || 'down';
+        const scrollParts = scrollValue.trim().split(':');
+        const scrollDir = scrollParts[0];
+        const scrollAmount = scrollParts[1] !== undefined ? Number(scrollParts[1]) : DEFAULT_SCROLL_AMOUNT;
+        const dx = scrollDir === 'left' ? -scrollAmount : scrollDir === 'right' ? scrollAmount : 0;
+        const dy = scrollDir === 'up' ? -scrollAmount : scrollDir === 'down' ? scrollAmount : 0;
+        await browser.evaluate(({ dx, dy }: { dx: number; dy: number }) => {
+          window.scrollBy(dx, dy);
+        }, { dx, dy });
+        await page.waitForTimeout(50);
         break;
+      }
 
       case 'select':
         if (!args.value) {
@@ -313,6 +342,18 @@ export async function handleExecuteAction(
           if (el) el.blur();
         }, selector);
         break;
+      case 'press': {
+        if (!args.value) {
+          return {
+            status: 'error',
+            error: 'value is required for press action (key name, e.g. "Enter", "Tab", "Escape")',
+          };
+        }
+        await page.keyboard.press(args.value, { delay: 0 });
+        await page.waitForTimeout(50);
+        break;
+      }
+
 
       case 'download': {
         // Гибридный подход: target_id — клик по элементу, value — прямое скачивание по URL
@@ -346,14 +387,13 @@ export async function handleExecuteAction(
 
           // Добавить состояние страницы, если запрошено
           if (args.return_state !== false) {
-            try {
-              const currentUrl = await browser.evaluate(() => window.location.href);
-              const state = await getStateAfterAction(session, browser, currentUrl as string);
-              if (state && result.data) {
-                result.data.state = state;
+            const currentUrl = await browser.evaluate(() => window.location.href);
+            const state = await getStateAfterAction(session, browser, currentUrl as string);
+            if (result.data) {
+              result.data.state = state;
+              if (state.error) {
+                result.warning = `State extraction failed: ${state.error}`;
               }
-            } catch {
-              // Gracefully ignore getStateAfterAction errors
             }
           }
 
@@ -401,14 +441,13 @@ export async function handleExecuteAction(
 
         // Добавить состояние страницы, если запрошено
         if (args.return_state !== false) {
-          try {
-            const currentUrl = await browser.evaluate(() => window.location.href);
-            const state = await getStateAfterAction(session, browser, currentUrl as string);
-            if (state && result.data) {
-              result.data.state = state;
+          const currentUrl = await browser.evaluate(() => window.location.href);
+          const state = await getStateAfterAction(session, browser, currentUrl as string);
+          if (result.data) {
+            result.data.state = state;
+            if (state.error) {
+              result.warning = `State extraction failed: ${state.error}`;
             }
-          } catch {
-            // Gracefully ignore getStateAfterAction errors
           }
         }
 
@@ -432,15 +471,25 @@ export async function handleExecuteAction(
       },
     };
 
-    // Всегда возвращать состояние страницы (return_state=true по умолчанию)
-    try {
+    // Возвращать состояние страницы только если return_state !== false
+    // По умолчанию return_state=true (для экономии ходов агента)
+    if (args.return_state !== false) {
+      // Ждём стабилизации DOM перед извлечением состояния
+      await browser.evaluate(() => {
+        return new Promise<void>((resolve) => {
+          // Даём время на завершение всех async операций и рендеринг
+          setTimeout(() => resolve(), 100);
+        });
+      });
+
       const currentUrl = await browser.evaluate(() => window.location.href);
       const state = await getStateAfterAction(session, browser, currentUrl as string);
-      if (state && result.data) {
+      if (result.data) {
         result.data.state = state;
+        if (state.error) {
+          result.warning = `State extraction failed: ${state.error}`;
+        }
       }
-    } catch {
-      // Gracefully ignore getStateAfterAction errors
     }
 
     result.metadata = computeToolMetrics(result.data, startTime);

@@ -19,6 +19,11 @@ export const ARIA_ROLE_TYPE_MAP: Readonly<Record<string, VslType>> = {
   dialog: 'modal',
   tab: 'tab',
   tabpanel: 'container',
+  combobox: 'input',
+  listbox: 'select',
+  searchbox: 'input',
+  spinbutton: 'input',
+  slider: 'input',
 };
 
 /**

@@ -221,12 +221,18 @@ export async function handleGetVisual(
       }
     }
 
-    // Получаем координаты элемента (после возможного скролла)
+    // Получаем координаты элемента с учётом scroll offset
     const rect = await browser.evaluate((sel: string) => {
       const el = document.querySelector(sel);
       if (!el) return null;
       const r = el.getBoundingClientRect();
-      return { x: r.x, y: r.y, width: r.width, height: r.height };
+      // Добавляем scroll offset для корректного clip
+      return {
+        x: r.x + window.scrollX,
+        y: r.y + window.scrollY,
+        width: r.width,
+        height: r.height
+      };
     }, selector);
 
     if (!rect) {
@@ -236,7 +242,7 @@ export async function handleGetVisual(
       };
     }
 
-    // Делаем скриншот с clip
+    // Делаем скриншот с clip (координаты теперь относительно всей страницы)
     const screenshotBuffer = await page.screenshot({
       type: 'png',
       clip: rect as { x: number; y: number; width: number; height: number },

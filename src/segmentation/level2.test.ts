@@ -28,6 +28,26 @@ describe('segmentation/level2 — resolveAriaRoleType', () => {
     expect(resolveAriaRoleType('tabpanel')).toBe('container');
   });
 
+  it('role="combobox" → input', () => {
+    expect(resolveAriaRoleType('combobox')).toBe('input');
+  });
+
+  it('role="listbox" → select', () => {
+    expect(resolveAriaRoleType('listbox')).toBe('select');
+  });
+
+  it('role="searchbox" → input', () => {
+    expect(resolveAriaRoleType('searchbox')).toBe('input');
+  });
+
+  it('role="spinbutton" → input', () => {
+    expect(resolveAriaRoleType('spinbutton')).toBe('input');
+  });
+
+  it('role="slider" → input', () => {
+    expect(resolveAriaRoleType('slider')).toBe('input');
+  });
+
   it('регистр не учитывается: "BUTTON" → button', () => {
     expect(resolveAriaRoleType('BUTTON')).toBe('button');
     expect(resolveAriaRoleType('Dialog')).toBe('modal');

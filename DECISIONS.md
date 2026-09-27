@@ -390,7 +390,25 @@ DECISIONS.md — это журнал всех архитектурных реш�
 **Последствия:** executeAction.ts L98-109 реализует lazy navigation. Тесты покрывают сценарии: URL совпадает (нет навигации), URL отличается (автоматическая навигация), snapshotUrl отсутствует (нет навигации). Документация обновлена: JSDoc executeAction.ts, ARCHITECTURE.md §2.7, README_AI.md, packages/mcp-server/README.md.
 **Связи:** DEC-024, DEC-019, DEC-010
 
+**Связи:** DEC-024, DEC-019, DEC-010
+
 ---
+
+### DEC-031: Graceful Error Handling — явная индикация сбоев извлечения состояния
+
+**Дата:** 2026-09-27
+**Статус:** accepted
+**Контекст:** При сбое извлечения snapshot/state после навигации (`vsl_navigate`) или выполнения действия (`vsl_execute_action`) агент получал `{status: "success"}` без каких-либо данных и без предупреждения. Это приводило к потере контекста и невозможности продолжить работу — агент не понимал, что состояние не было получено.
+**Решение:** Добавить явную индикацию ошибок извлечения через поля `warning` (root level) и `state.error` (для execute_action), при сохранении обратной совместимости для успешных случаев:
+
+1. **`vsl_navigate`**: при сбое `snapshotFromElements` возвращается `{status: "success", data: {url, title}, warning: "Failed to extract snapshot: ..."}`
+2. **`vsl_execute_action`**: при сбое `getStateAfterAction` возвращается `{status: "success", data: {..., state: {error: "..."}}, warning: "State extraction failed: ..."}`
+3. **Логирование**: все ошибки логируются через `console.error` с префиксами `[vsl_navigate]` и `[vsl_execute_action]` для отладки
+4. **`getStateAfterAction`** возвращает `StateAfterAction` интерфейс с опциональным `error?: string` вместо `undefined`
+
+**Обоснование:** (1) Агент должен явно знать, что состояние не было получено — это критично для принятия решений. (2) Обратная совместимость: успешные случаи возвращают неизменную структуру. (3) Логирование помогает при отладке. (4) Поле `warning` на root level — единая точка для проверки проблем извлечения. (5) Поле `state.error` — детальная информация о конкретной ошибке.
+**Последствия:** `packages/mcp-server/src/tools/navigate.ts` и `packages/mcp-server/src/tools/executeAction.ts` обновлены. Тесты покрывают сценарии сбоев извлечения. README_AI.md описывает новые поля в MCP Tools секции.
+**Связи:** DEC-019, DEC-024, DEC-028
 
 ---
 ## 4. Decision Index
@@ -428,6 +446,7 @@ DECISIONS.md — это журнал всех архитектурных реш�
 ---
 | DEC-027 | Prompt Injection Filter — защита от инъекций через веб-контент (M1.8) | accepted | DEC-001, DEC-004, DEC-010, DEC-024, DEC-026 |
 | DEC-028 | Lazy Navigation в vsl_execute_action — автоматическая навигация на URL из snapshot | accepted | DEC-024, DEC-019, DEC-010 |
+| DEC-031 | Graceful Error Handling — явная индикация сбоев извлечения состояния | accepted | DEC-019, DEC-024, DEC-028 |
 ## Cross-References
 
 - [PRODUCT_CONCEPT.md](./PRODUCT_CONCEPT.md) — продуктовая концепция VSL, value proposition, non-goals

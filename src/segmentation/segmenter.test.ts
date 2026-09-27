@@ -7,10 +7,15 @@ import { isAriaHidden, segmentTree, type SegmentedElement } from './segmenter';
 import { extractDomTree } from '../capture/domExtractor';
 
 describe('ARIA_ROLE_TYPE_MAP', () => {
-  it('содержит ровно 4 контракные роли', () => {
+  it('содержит ровно 9 контракных ролей', () => {
     expect(Object.keys(ARIA_ROLE_TYPE_MAP).sort()).toEqual([
       'button',
+      'combobox',
       'dialog',
+      'listbox',
+      'searchbox',
+      'slider',
+      'spinbutton',
       'tab',
       'tabpanel',
     ]);

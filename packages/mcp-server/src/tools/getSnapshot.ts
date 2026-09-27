@@ -1,20 +1,15 @@
 /**
- * Tool: vsl_get_snapshot (T1.6.3).
+ * Tool: vsl_get_snapshot (T1.6.3, M1.7).
  *
- * Получает текущий VSL snapshot страницы.
- * Если URL указан — переходит по нему, затем делает snapshot.
- * Если URL не указан — использует текущую страницу в браузере.
+ * Извлекает VSL snapshot из текущей страницы браузера.
  *
  * Flow:
- *  1. Навигация по URL (если указан)
- *  2. Извлечение DOM-дерева через evaluate() → ExtractedElement[]
+ *  1. Проверка доступности браузера
+ *  2. Извлечение DOM-дерева через browser.evaluate(extractDomTreeInBrowser)
  *  3. Передача в ServerSession.snapshotFromElements() → SDK pipeline:
  *     segmentTree → buildVslDocument → cache → diff
  *  4. Запись data-vsl-id атрибутов в DOM для execute_action
  *  5. Возврат VSL JSON (полный документ или diff)
- *
- * Архитектура: MCP сервер построен ПОВЕРХ SDK.
- * Весь pipeline (сегментация, построение, кэш, дифф) выполняется SDK.
  */
 
 import type { BrowserManager } from '../browser/manager.js';
@@ -22,6 +17,7 @@ import type { ServerSession } from '../session/serverSession.js';
 import type { McpServerConfig } from '../config/loader.js';
 import type { VslDocument, VslObject, SnapshotInput, SnapshotResult } from '@thinkingos/vsl-sdk';
 import { isVslDiff } from '@thinkingos/vsl-sdk';
+import { injectVslIdsIntoDom } from '../utils/injectVslIds.js';
 
 /** Уровни детализации snapshot (DEC-027). */
 export type DetailLevel = 'low' | 'medium' | 'high';
@@ -267,14 +263,33 @@ export function extractDomTreeInBrowser(): unknown[] {
         return;
       }
 
+      const attributes = extractAttributes(child);
+      const css = captureCss(child);
+
+      // Skip aria-hidden elements (matches segmentTree behavior)
+      if (attributes['aria-hidden'] === 'true') {
+        return;
+      }
+
+      // Skip pointer-invisible elements (matches segmentTree behavior)
+      if (css.opacity === '0' && css.pointerEvents === 'none') {
+        return;
+      }
+
+      const children = collectVisibleChildren(child, path);
+
+      // Generate VSL ID from tag and indexPath, inject data-vsl-id directly into DOM
+      const vslId = `${tag}_${path.join('_')}`;
+      child.setAttribute('data-vsl-id', vslId);
+
       result.push({
         tag,
         indexPath: path,
         rect,
         text: ownText(child) || null,
-        attributes: extractAttributes(child),
-        css: captureCss(child),
-        children: collectVisibleChildren(child, path),
+        attributes,
+        css,
+        children,
       });
     });
     return result;
@@ -304,7 +319,7 @@ export async function handleGetSnapshot(
   _config: McpServerConfig,
   ): Promise<GetSnapshotResult> {
   const startTime = Date.now();
-  const detailLevel = args.detail_level || 'high';
+  const detailLevel = args.detail_level || 'medium';
   const ttl = args.ttl ?? DEFAULT_SNAPSHOT_TTL_MS;
 
   // Валидация параметров (DEC-030)
@@ -389,39 +404,9 @@ export async function handleGetSnapshot(
       ? session.getSnapshot()
       : result;
 
-    // 8. Записываем VSL ID обратно в DOM для execute_action
-    await browser.evaluate(
-      (objects: VslObject[]) => {
-        function visit(obj: VslObject): void {
-          const parts = obj.id.split('_');
-          if (parts.length < 2) return;
-          
-          const indexPath = parts.slice(1).map(Number);
-          
-          let current: Element | null = document.body;
-          for (const idx of indexPath) {
-            if (!current) break;
-            const elementChildren: Element[] = Array.from(current.children);
-            current = elementChildren[idx] || null;
-          }
-          
-          if (current) {
-            current.setAttribute('data-vsl-id', obj.id);
-          }
-          
-          if (obj.ch) {
-            for (const child of obj.ch) {
-              visit(child);
-            }
-          }
-        }
-        
-        for (const obj of objects) {
-          visit(obj);
-        }
-      },
-      currentDoc.objects,
-    );
+    // 7.5. Inject data-vsl-id attributes into DOM for execute_action
+    // Shared utility ensures consistent injection across getSnapshot, navigate, executeAction
+    await injectVslIdsIntoDom(browser, currentDoc.objects);
 
     // 9. Применяем фильтрацию по detail_level (DEC-027)
     const filteredObjects = filterObjectsByDetailLevel(currentDoc.objects, detailLevel);
