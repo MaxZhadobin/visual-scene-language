@@ -13,8 +13,10 @@
 import { computeToolMetrics } from '../utils/metrics.js';
 import type { BrowserManager } from '../browser/manager.js';
 import type { ServerSession } from '../session/serverSession.js';
-import { extractDomTreeInBrowser } from './getSnapshot.js';
+import { extractDomTree } from './getSnapshot.js';
 import { injectVslIdsIntoDom } from '../utils/injectVslIds.js';
+import { filterObjectsByDetailLevel } from '../utils/detailLevelFilter.js';
+import { computeScrollable, computeVisibleWindow, filterObjectsByViewport, type ScrollableInfo } from '../utils/viewportFilter.js';
 import type { SnapshotInput } from '@thinkingos/vsl-sdk';
 
 /** Аргументы vsl_navigate. */
@@ -30,7 +32,7 @@ export interface NavigateResult {
   /** Предупреждение о проблемах при извлечении snapshot. */
   warning?: string;
   /** Метрики производительности (DEC-029). */
-  metadata?: { json_size_bytes: number; estimated_tokens: number; execution_time_ms: number; timestamp: string };
+  metadata?: { json_size_bytes: number; estimated_tokens: number; execution_time_ms: number; timestamp: string; scrollable?: ScrollableInfo };
 }
 
 /**
@@ -85,23 +87,31 @@ export async function handleNavigate(
     // 5. Извлекаем snapshot новой страницы
     let snapshot: unknown;
     let snapshotWarning: string | undefined;
+    let scrollableMeta: ScrollableInfo | undefined;
     try {
-      const elements = await browser.evaluate(extractDomTreeInBrowser);
-      const viewport = await browser.evaluate(() => ({
-        width: window.innerWidth,
-        height: window.innerHeight,
-      }));
+      // Общий хелпер: прямая передача функции в evaluate + РАЗВОРАЧИВАНИЕ
+      // обёртки результата. Без разворачивания SDK segmentTree получает
+      // объект без attributes и падает с "reading 'aria-hidden'".
+      const extraction = await extractDomTree(browser);
       const input: SnapshotInput = {
-        viewport: viewport as { width: number; height: number },
+        viewport: extraction.viewport,
         url: args.url,
         title: title as string,
         timestamp: new Date().toISOString(),
+        scroll: extraction.scroll,
       };
-      session.snapshotFromElements(elements as unknown[], input);
-      snapshot = session.getSnapshot();
+      session.snapshotFromElements(extraction.elements, input);
       // Inject data-vsl-id attributes into DOM for execute_action
       const currentDoc = session.getSnapshot();
       await injectVslIdsIntoDom(browser, currentDoc.objects);
+      // Единый пайплайн отдачи (АС[3]): вьюпорт-фильтр + дефолтный
+      // detail_level 'medium' (у тула нет параметра детализации).
+      const scrollContext = session.getScrollContext();
+      const win = computeVisibleWindow(currentDoc.canvas.viewport, scrollContext);
+      scrollableMeta = computeScrollable(currentDoc.canvas.viewport, scrollContext);
+      const viewportFiltered = filterObjectsByViewport(currentDoc.objects, win);
+      const filteredObjects = filterObjectsByDetailLevel(viewportFiltered, 'medium');
+      snapshot = { ...currentDoc, objects: filteredObjects };
     } catch (error) {
       // Snapshot extraction failed — log error and add warning
       const errorMessage = `Failed to extract snapshot: ${error instanceof Error ? error.message : String(error)}`;
@@ -118,7 +128,7 @@ export async function handleNavigate(
     const result: NavigateResult = {
       status: 'success',
       data,
-      metadata: computeToolMetrics(data, startTime),
+      metadata: { ...computeToolMetrics(data, startTime), scrollable: scrollableMeta },
     };
 
     // Add warning if snapshot extraction failed

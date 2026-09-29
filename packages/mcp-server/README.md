@@ -83,25 +83,25 @@ export VSL_VISION_MODEL="meta-llama/Llama-Vision"
 
 **Параметры:**
 - `url` (string, optional) — URL страницы. Если не указан, используется текущая страница.
+- `detail_level` (string, optional) — уровень детализации: `low` (только интерактивные элементы), `medium` (интерактивные + контейнеры, по умолчанию), `high` (все объекты).
+- `ttl` (number, optional) — TTL кэша в мс (по умолчанию 5000 = 5с). `0` — отключить кэширование.
+- `full` (boolean, optional) — полный режим: возвращает ВЕСЬ документ без вьюпорт-фильтра и фильтра детализации, минуя дифф-фёрст логику. Используйте, если история агента обрезалась и нужна полная картина страницы (заменяет удалённый тул `vsl_get_full_json`).
 
-**Возвращает:** `VslDocument` — полный VSL JSON.
+**Возвращает:** `VslDocument` — VSL JSON, отфильтрованный по видимому окну и уровню детализации (или полный при `full: true`). Содержит метаданные `scrollable: { top, bottom }` (есть ли контент выше/ниже видимого окна).
 
-### vsl_get_diff
-
-Получить изменения с момента последнего snapshot. Возвращает только diff (added/modified/removed).
-
-**Параметры:** нет.
-
-**Возвращает:** `VslDiff` — дифф с момента последнего `vsl_get_snapshot`.
+**Кэширование:** повторный вызов с тем же URL в пределах TTL возвращает документ из кэша, перефильтрованный по новым параметрам, без обращения к браузеру.
 
 ### vsl_execute_action
 
 Выполнить действие над элементом VSL.
 
 **Параметры:**
-- `action` (string, required) — имя действия: `click`, `type`, `fill` (алиас `type`), `scroll`, `select`, `hover`, `focus`, `blur`, `check`, `uncheck`, `press`, `upload` (загрузка файла, требует `value` — путь к файлу или список путей через запятую)
+- `action` (string, required) — имя действия: `click`, `type`, `fill` (алиас `type`), `scroll`, `select`, `hover`, `focus`, `blur`, `check`, `uncheck`, `press`, `upload` (загрузка файла, требует `value` — путь к файлу или список путей через запятую), `download` (скачивание файла: клик по элементу либо прямое скачивание по URL через `value`)
 - `target_id` (string, required) — ID элемента в VSL JSON
 - `value` (string, optional) — значение для действия (текст для `type`, опция для `select`, путь к файлу для `upload`)
+- `timeout` (number, optional) — таймаут ожидания завершения скачивания в мс (только для действия `download`)
+- `save_path` (string, optional) — путь для сохранения скачанного файла (только для действия `download`; относительные пути разрешаются в папку загрузок с проверкой выхода за её пределы)
+- `return_state` (boolean, optional, по умолчанию `true`) — возвращать ли состояние страницы после действия (дифф + снапшот, отфильтрованные по видимому окну)
 
 **Возвращает:** результат выполнения действия.
 
@@ -117,6 +117,20 @@ Agent: vsl_execute_action(action="upload", target_id="file_input_0", value="/pat
 
 Agent: vsl_execute_action(action="upload", target_id="file_input_1", value="/path/file1.jpg, /path/file2.jpg")
 → { success: true, data: { upload: { files: ["/path/file1.jpg", "/path/file2.jpg"], success: true } } }
+
+**Пример скачивания файла (действие `download`):**
+
+
+Agent: vsl_execute_action(action="download", target_id="btn_download")
+→ { success: true, data: { download: { downloadId: "dl_1", filename: "report.pdf", url: "https://example.com/report.pdf", status: "completed", path: "/downloads/report.pdf" } } }
+
+
+Прямое скачивание по URL с сохранением в указанный путь и таймаутом:
+
+
+Agent: vsl_execute_action(action="download", target_id="btn_download", value="https://example.com/file.pdf", save_path="/tmp/file.pdf", timeout=15000)
+→ { success: true, data: { download: { downloadId: "dl_1", filename: "file.pdf", status: "completed", path: "/tmp/file.pdf" } } }
+
 
 
 **Lazy Navigation (DEC-028):**
@@ -170,18 +184,40 @@ Agent: vsl_execute_action(action="upload", target_id="file_input_1", value="/pat
 **Особенности:**
 - Повторные чтения возвращают diff (Snapshot Session)
 - Readable-режим фильтрует nav, footer, cookie banners
-- HTTP-путь возвращает VSL JSON с семантической структурой (без точных координат bbox)
-- Render-путь возвращает полный VSL JSON с координатами для выполнения действий
+- HTTP-путь возвращает VSL JSON с семантической структурой без координат (объекты без `p`/`s` прозрачно проходят вьюпорт-фильтр)
+- Render-путь возвращает полный VSL JSON с абсолютными пиксельными координатами для выполнения действий
 
 **Возвращает:** VSL JSON структуру страницы (полный документ или diff).
 
-### vsl_get_full_json
+### vsl_get_text_block
 
-Получить полный VSL JSON, минуя diff-first логику Snapshot Session.
+Получить полный текст по `txt_ref` из ленивой загрузки текстов. Тексты длиннее ~200 символов в снапшоте автоматически заменяются на `txt_preview` (первые ~50 символов) + `txt_ref` (ссылка вида `tb_001`).
 
-**Параметры:** нет.
+**Параметры:**
+- `block_id` (string, required) — ID текстового блока из поля `txt_ref` объекта снапшота (формат `tb_xxx`)
 
-**Используйте**, если история агента обрезалась и он не видит полную картину из инкрементальных диффов.
+**Возвращает:** `{ block_id, text }` — полное содержимое текстового блока.
+
+## Единый пайплайн отдачи: полный кэш + фильтрация на отдаче
+
+Все пути отдачи (`vsl_get_snapshot`, `vsl_navigate`, `vsl_execute_action` с `return_state`, браузерный путь `vsl_read_page`) используют единый пайплайн:
+
+1. **Полное извлечение** — из браузера извлекается ПОЛНОЕ DOM-дерево, включая элементы вне видимой области (никакого усечения на этапе извлечения).
+2. **Полный кэш** — сессия хранит полный `VslDocument`; диффы считаются на полных документах.
+3. **Абсолютные координаты** — поле `p` объекта: абсолютные страница-релятивные пиксели `[x, y]` (с учётом скролла страницы); `s` — размер `[ширина, высота]`. Координаты инвариантны к ресайзу окна.
+4. **Фильтрация на отдаче** — видимое окно = `[скролл, скролл + вьюпорт]`; сначала вьюпорт-фильтр (контейнер жив, пока есть видимые потомки), затем фильтр детализации `detail_level`.
+5. **Метаданные скролла** — результат содержит `scrollable: { top, bottom }`: есть ли контент выше/ниже видимого окна (ориентир для действий `scroll`).
+
+**Различия режимов:**
+
+| | ХТТП-режим (`vsl_read_page`) | Браузерный режим |
+|---|---|---|
+| Когда | статические страницы | SPA и интерактивные страницы |
+| Координаты | отсутствуют (`p`/`s` = null) | абсолютные пиксели |
+| Вьюпорт-фильтр | прозрачен (все объекты проходят) | отсекает невидимые элементы |
+| Действия | недоступны напрямую — `vsl_execute_action` сам запустит браузер (ленивая навигация) | полный набор действий |
+
+**Повторные запросы без браузера:** смена `detail_level` или `full` в пределах кэша перефильтровывает документ из кэша — без повторного извлечения.
 
 ## Ресурсы (MCP Resources)
 
@@ -279,10 +315,11 @@ Agent: vsl_execute_action(action="click", target_id="btn_refresh")
 
 Agent: vsl_read_page(url="https://spa-app.com/dashboard")
 → { status: "success", data: { mode: "render", diff: { added: [...], modified: [...] }, hasDiff: true } }
-### Получение полного VSL JSON
+### Получение полного снапшота при потере контекста
 
-Agent: vsl_get_full_json()
-→ { vsl_version: "1.0.0", canvas: {...}, objects: [...] }
+# История агента обрезалась — запрашиваем полный документ без фильтров
+Agent: vsl_get_snapshot(full=true)
+→ { vsl_version: "1.0.0", canvas: {...}, objects: [ ...все элементы, включая невидимые... ] }
 ## Архитектура
 
 ┌─────────────────────────────────────────────┐
@@ -292,9 +329,9 @@ Agent: vsl_get_full_json()
                    ▼
 ┌─────────────────────────────────────────────┐
 │  @thinkingos/vsl-mcp-server                    │
-│  ├── Tools (8): snapshot, diff, action,     │
-│  │            navigate, cache, visual,      │
-│  │            read_page, full_json          │
+│  ├── Tools (7): snapshot, action, navigate, │
+│  │            cache, visual, read_page,     │
+│  │            text_block                    │
 │  ├── Resources (2): vsl://current,          │
 │  │                  vsl://diff              │
 │  ├── BrowserManager (Playwright, optional)  │

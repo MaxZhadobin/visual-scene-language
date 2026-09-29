@@ -9,13 +9,13 @@
  *    кэша (fresh set / invalidate / set поддерева);
  *  - смена URL → снова полный документ (cache.clear сбрасывает даже посторонние
  *    записи), счётчик версий начинается с 1;
- *  - viewport resize при том же URL → diff + invalidateCoordinates: modified
- *    содержит только {id, p} — s абсолютны (px) и от viewport не зависят
- *    (vslBuilder: s = Math.round(w/h), p = rel координата), у неизменённых
- *    записей coordHash обнулён.
+ *  - viewport resize при том же URL → пустой дифф + invalidateCoordinates:
+ *    p — абсолютные страница-релятивные пиксели (АС[2]) и не зависят от
+ *    размера окна, поэтому при фиксированных data-rect все элементы в
+ *    unchanged_refs; coordHash всех записей обнуляется (страховка от reflow).
  */
 
-import { createCacheStore, computeCoordHash } from '../cache/cacheStore';
+import { createCacheStore } from '../cache/cacheStore';
 import type { CacheStore } from '../cache/cacheStore';
 import { VSL_VERSION } from '../types/vsl';
 import type { VslDocument, VslObject } from '../types/vsl';
@@ -117,15 +117,19 @@ describe('VslSnapshotSession (T1.2.4, ARCHITECTURE §2.4)', () => {
 
     const diff = expectDiff(session.snapshot(host, input(URL_A)));
 
+    // id = tag_indexPath: удалённый div и его a уходят как removed.
+    // main_0 и button_0_0 unchanged (ch не участвует в objectsEqual).
     expect(diff.changes.removed).toEqual([{ id: 'div_0_1' }, { id: 'a_0_1_0' }]);
     expect(diff.changes.added).toEqual([]);
     expect(diff.changes.modified).toEqual([]);
+    expect(diff.changes.unchanged_refs).toEqual(['main_0', 'button_0_0']);
     expect(store.has('div_0_1')).toBe(false);
     expect(store.has('a_0_1_0')).toBe(false);
     expect(store.has('main_0')).toBe(true);
+    expect(store.has('button_0_0')).toBe(true);
   });
 
-  it('добавление элемента → added только корень поддерева + set в кэш', () => {
+  it('добавление элемента → новый ID для добавленного элемента, остальные stable', () => {
     session.snapshot(host, input(URL_A));
     const added = document.createElement('button');
     added.setAttribute('data-rect', '200,16,120,32');
@@ -134,11 +138,16 @@ describe('VslSnapshotSession (T1.2.4, ARCHITECTURE §2.4)', () => {
 
     const diff = expectDiff(session.snapshot(host, input(URL_A)));
 
-    expect(diff.changes.added).toEqual([
-      expect.objectContaining({ id: 'button_0_2', t: 'button', txt: 'Новая' }),
-    ]);
+    // id = tag_indexPath: новый button получает индекс 2 внутри main → button_0_2.
+    // Остальные ID стабильны (main_0, button_0_0, div_0_1, a_0_1_0).
     expect(diff.changes.removed).toEqual([]);
+    expect(diff.changes.added).toHaveLength(1);
+    expect(diff.changes.added[0]).toEqual(expect.objectContaining({ id: 'button_0_2' }));
+    expect(store.has('main_0')).toBe(true);
+    expect(store.has('button_0_0')).toBe(true);
     expect(store.has('button_0_2')).toBe(true);
+    expect(store.has('div_0_1')).toBe(true);
+    expect(store.has('a_0_1_0')).toBe(true);
   });
 
   it('смена URL → полный документ; cache.clear удаляет посторонние записи; версии с 1', () => {
@@ -159,25 +168,23 @@ describe('VslSnapshotSession (T1.2.4, ARCHITECTURE §2.4)', () => {
     expect([diff.diff_version, diff.base_version]).toEqual([2, 1]);
   });
 
-  it('resize при том же URL → diff + invalidateCoordinates: modified только {id, p}, coordHash неизменённых = ""', () => {
+  it('resize при том же URL → пустой дифф + invalidateCoordinates: абсолютные p инвариантны, все в unchanged', () => {
     session.snapshot(host, input(URL_A));
     const diff = expectDiff(session.snapshot(host, input(URL_A, 1920, 1080)));
 
-    // p нормализованы к новому viewport (округление до 4 знаков — контракт
-    // builder); s абсолютны и не изменились → в modified только p.
-    expect(diff.changes.modified).toEqual([
-      { id: 'button_0_0', p: [0.0083, 0.0148] },
-      { id: 'div_0_1', p: [0, 0.0593] },
-      { id: 'a_0_1_0', p: [0.0083, 0.0741] },
-    ]);
-    expect(diff.changes.unchanged_refs).toEqual(['main_0']);
+    // p — абсолютные страница-релятивные пиксели (АС[2]): не зависят от размера
+    // окна, а контент и data-rect фикстуры неизменны → полностью пустой дифф.
+    expect(diff.changes.added).toEqual([]);
+    expect(diff.changes.modified).toEqual([]);
+    expect(diff.changes.removed).toEqual([]);
+    expect(diff.changes.unchanged_refs).toEqual(ALL_IDS);
 
-    // «Сброс координат» §5.2: неизменённые остались в кэше с обнулённым coordHash.
-    expect(store.get('main_0')?.coordHash).toBe('');
-    // Изменённые перезаписаны свежими объектами — coordHash пересчитан от нового p.
-    expect(store.get('button_0_0')?.coordHash).toBe(
-      computeCoordHash({ id: 'button_0_0', t: 'button', p: [0.0083, 0.0148], s: [160, 32] }),
-    );
+    // «Сброс координат» §5.2: при смене viewport session вызывает
+    // invalidateCoordinates — все записи в кэше с обнулённым coordHash
+    // (страховка от reflow, который мог сдвинуть элементы).
+    for (const id of ALL_IDS) {
+      expect(store.get(id)?.coordHash).toBe('');
+    }
   });
 
   it('счётчик версий монотонен при том же URL: full → 2/1 → 3/2', () => {
@@ -304,9 +311,15 @@ describe('VslSnapshotSession.snapshotWithVision (T1.5.5): vision-ветка ко
     const second = await session.snapshotWithVision(host, input(URL_A), deps);
 
     const diff = expectDiff(second.snapshot);
+    // id = tag_indexPath: id пересчитывается по DOM-пути детерминированно.
+    // Первый вызов: main_0, button_0_0, canvas_0_1
+    // Второй вызов (с добавленным canvas): ..., canvas_0_2
+    // Diff видит это как добавление canvas_0_2 внутри main.
+    expect(diff.changes.removed).toEqual([]);
     expect(diff.changes.added).toHaveLength(1);
     const added = diff.changes.added[0]!;
     expect(added.id).toBe('canvas_0_2');
+    // Новый canvas (canvas_0_2) находится внутри children main.
     expect(added.t).toBe('chart');
     expect(added.vf).toBeDefined();
     expect(second.fragments.get(added.vf!)).toEqual({ mediaType: 'image/webp', data: 'AAAA' });

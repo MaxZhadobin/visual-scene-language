@@ -8,15 +8,23 @@
  * SDK предоставляет pipeline (segmentTree → buildVslDocument) и diff engine,
  * но состояние (lastDocument, version) хранится здесь.
  *
+ * Единый пайплайн отдачи (АС[3]): кэш хранит ПОЛНЫЙ документ в абсолютных
+ * координатах; сессия дополнительно хранит метаданные скролла страницы
+ * (scrollContext) для вычисления видимого окна и метаданных scrollable.
+ *
  * Lifecycle:
  *  - setSnapshot(vslDoc) — установить текущий snapshot (для обратной совместимости)
  *  - getSnapshot() — получить текущий snapshot
+ *  - getPreviousSnapshot() — получить предыдущий snapshot (для вьюпорт-фильтра диффа)
  *  - getDiff() — получить diff с момента предыдущего snapshot
+ *  - getScrollContext() — метаданные скролла последнего снапшота
+ *  - setScrollContext() — явно установить скролл-контекст
  *  - clear() — сбросить состояние
  *  - hasSnapshot() — проверить наличие snapshot
  */
 
 import { diffVslDocuments, segmentTree, buildVslDocument, type VslDiff, type VslDocument, type SnapshotInput, type SnapshotResult, type ExtractedElement } from '@thinkingos/vsl-sdk';
+import type { ScrollContext } from '../utils/viewportFilter.js';
 
 /**
  * Серверная snapshot session.
@@ -27,6 +35,8 @@ export class ServerSession {
   private previousDocument: VslDocument | null = null;
   private version = 0;
   private onSnapshotChange: (() => void) | null = null;
+  /** Метаданные скролла последнего снапшота (единый пайплайн отдачи, АС[3]). */
+  private scrollContext: ScrollContext | null = null;
 
   /**
    * Регистрирует callback для уведомлений об изменении snapshot.
@@ -47,6 +57,8 @@ export class ServerSession {
     }
     this.currentDocument = doc;
     this.version += 1;
+    // Путь setSnapshot (HTTP-путь read_page) не несёт данных о скролле
+    this.scrollContext = null;
 
     // Уведомляем подписчиков об изменении
     if (this.onSnapshotChange) {
@@ -79,6 +91,9 @@ export class ServerSession {
     this.currentDocument = doc;
     this.version += 1;
 
+    // Сохраняем метаданные скролла для единого пайплайна отдачи (АС[3])
+    this.scrollContext = input.scroll ? { ...input.scroll } : null;
+
     // Уведомляем подписчиков об изменении
     if (this.onSnapshotChange) {
       this.onSnapshotChange();
@@ -105,6 +120,14 @@ export class ServerSession {
       throw new Error('No snapshot available. Call vsl_get_snapshot first.');
     }
     return this.currentDocument;
+  }
+
+  /**
+   * Возвращает предыдущий полный документ (для вьюпорт-фильтра диффа:
+   * видимость removed-объектов определяется по prev-документу).
+   */
+  getPreviousSnapshot(): VslDocument | null {
+    return this.previousDocument;
   }
 
   /**
@@ -138,6 +161,7 @@ export class ServerSession {
     this.currentDocument = null;
     this.previousDocument = null;
     this.version = 0;
+    this.scrollContext = null;
   }
 
   /**
@@ -145,5 +169,21 @@ export class ServerSession {
    */
   getVersion(): number {
     return this.version;
+  }
+
+  /**
+   * Возвращает метаданные скролла последнего снапшота (единый пайплайн отдачи).
+   * Используются для вычисления видимого окна и метаданных scrollable {top, bottom}.
+   */
+  getScrollContext(): ScrollContext | null {
+    return this.scrollContext;
+  }
+
+  /**
+   * Устанавливает скролл-контекст явно (для путей, идущих мимо
+   * snapshotFromElements).
+   */
+  setScrollContext(scroll: ScrollContext | null): void {
+    this.scrollContext = scroll;
   }
 }

@@ -16,6 +16,7 @@
 
 import * as cheerio from 'cheerio';
 import type { AnyNode } from 'domhandler';
+import { getGlobalFilter, createIdGenerator } from '@thinkingos/vsl-sdk';
 
 /** Результат HTTP-извлечения. */
 export interface HttpExtractResult {
@@ -121,8 +122,8 @@ export async function extractViaHttp(
   // 3. Readable-фильтр
   const filteredHtml = readable ? applyReadableFilter(rawHtml) : rawHtml;
 
-  // 4. Извлечение текста
-  const textContent = extractTextContent(filteredHtml);
+  // 4. Извлечение текста (с фильтрацией Prompt Injection, T1.8.5)
+  const textContent = extractTextContent(filteredHtml, url);
 
   // 5. Метаданные
   const title = extractTitle(rawHtml);
@@ -177,9 +178,10 @@ export function applyReadableFilter(html: string): string {
  * Извлекает текстовый контент из HTML.
  *
  * @param html - HTML-контент
- * @returns Текстовый контент (без тегов)
+ * @param url - URL страницы (для Prompt Injection Filter whitelist, T1.8.5)
+ * @returns Текстовый контент (без тегов, отфильтрованный)
  */
-export function extractTextContent(html: string): string {
+export function extractTextContent(html: string, url?: string): string {
   // Удаление script/style тегов
   let text = html.replace(/<script[^>]*>.*?<\/script>/gis, '');
   text = text.replace(/<style[^>]*>.*?<\/style>/gis, '');
@@ -189,6 +191,13 @@ export function extractTextContent(html: string): string {
 
   // Нормализация пробелов
   text = text.replace(/\s+/g, ' ').trim();
+
+  // Применяем Prompt Injection Filter (T1.8.5, M1.8)
+  const filter = getGlobalFilter();
+  if (filter.isEnabled()) {
+    const result = filter.scan(text, url);
+    return result.cleanText;
+  }
 
   return text;
 }
@@ -278,6 +287,9 @@ export function buildVslFromDom(
   const textBlocks = new Map<string, string>();
   let textBlockCounter = 0;
 
+  // Unified ID generator (DEC-027 optimization)
+  const idGenerator = createIdGenerator();
+
   const LAZY_TEXT_THRESHOLD = 200;
   const LAZY_TEXT_PREVIEW_LENGTH = 50;
 
@@ -324,7 +336,7 @@ export function buildVslFromDom(
 
     // Построение VslObject
     const obj: VslObject = {
-      id: `${tag}_${objects.length}`,
+      id: idGenerator.generate($el.attr('id'), type),
       t: type,
       p: null, // HTTP-путь: нет координат
       s: null, // HTTP-путь: нет размеров

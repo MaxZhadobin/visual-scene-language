@@ -1,17 +1,14 @@
 /**
  * Регистрация MCP Tools (T1.6.3, M1.7).
  *
- * 10 инструментов VSL:
- *  - vsl_get_snapshot: получить текущий VSL snapshot
- *  - vsl_get_diff: получить только изменения
- *  - vsl_execute_action: выполнить действие
+ * 7 инструментов VSL:
+ *  - vsl_get_snapshot: получить текущий VSL snapshot (параметр full — полный документ)
+ *  - vsl_execute_action: выполнить действие (включая download)
  *  - vsl_navigate: перейти по URL
  *  - vsl_clear_cache: сбросить кэш
  *  - vsl_get_visual: получить visual fragment
  *  - vsl_read_page: гибридное чтение веб-страниц
- *  - vsl_get_full_json: получить полный VSL JSON (bypass diff-first)
  *  - vsl_get_text_block: получить полный текст по txt_ref (lazy text loading, M1.7)
- *  - vsl_download: управление скачиванием файлов (Playwright BrowserContext)
  */
 
 import type { Server } from '@modelcontextprotocol/sdk/server/index.js';
@@ -23,15 +20,12 @@ import {
 import type { McpServerConfig } from '../config/loader.js';
 import type { SessionManager } from '../session/sessionManager.js';
 import { handleGetSnapshot } from './getSnapshot.js';
-import { handleGetDiff } from './getDiff.js';
 import { handleNavigate } from './navigate.js';
 import { handleClearCache } from './clearCache.js';
 import { handleExecuteAction } from './executeAction.js';
 import { handleGetVisual } from './getVisual.js';
 import { handleReadPage } from './readPage.js';
-import { handleGetFullJson } from './getFullJson.js';
 import { handleGetTextBlock } from './getTextBlock.js';
-import { handleDownload } from './download.js';
 
 /** Список всех инструментов VSL. */
 const VSL_TOOLS = [
@@ -54,15 +48,11 @@ const VSL_TOOLS = [
           type: 'number',
           description: 'TTL кэша в миллисекундах (default: 5000 = 5s). Установите 0 для отключения кэширования.',
         },
+        full: {
+          type: 'boolean',
+          description: 'Полный режим: возвращает весь документ без фильтров (замена удалённого тула полного снапшота)',
+        },
       },
-    },
-  },
-  {
-    name: 'vsl_get_diff',
-    description: 'Получить только изменения с момента последнего snapshot. Возвращает Diff JSON с секциями added (новые объекты), modified (изменённые), removed (удалённые). Пример: { changes:{ added:[{id:btn_3,type:button,text:Отправить,bbox:[300,400,100,30]}], modified:[{id:btn_1,changes:{text:[Войти,Авторизация]}}], removed:[{id:inp_2}] } }. Используйте для отслеживания изменений на странице после действий (клик, навигация, форма).',
-    inputSchema: {
-      type: 'object',
-      properties: {},
     },
   },
   {
@@ -86,6 +76,14 @@ const VSL_TOOLS = [
         return_state: {
           type: 'boolean',
           description: 'Если true, возвращает diff и snapshot после действия. Полезно для отслеживания изменений DOM без дополнительного вызова vsl_get_diff. Default: true — всегда возвращать состояние для экономии ходов агента. Установите false для отключения.',
+        },
+        timeout: {
+          type: 'number',
+          description: 'Таймаут ожидания завершения скачивания в мс (только для действия download)',
+        },
+        save_path: {
+          type: 'string',
+          description: 'Путь для сохранения скачанного файла (только для действия download)',
         },
       },
       required: ['action', 'target_id'],
@@ -150,14 +148,6 @@ const VSL_TOOLS = [
     },
   },
   {
-    name: 'vsl_get_full_json',
-    description: 'Получить полный VSL JSON текущей страницы, минуя diff-first логику. Используйте когда: (1) история агента обрезалась и вы потеряли контекст, (2) нужно увидеть полную картину страницы, (3) инкрементальные диффы не дают достаточно информации. Пример: {}. Возвращает полный VSL Document с viewport и objects.',
-    inputSchema: {
-      type: 'object',
-      properties: {},
-    },
-  },
-  {
     name: 'vsl_get_text_block',
     description: 'Получить полный текст по txt_ref из lazy text loading (M1.7). Когда текст элемента > 200 символов, в VSL JSON хранится только txt_preview (первые ~50 символов) и txt_ref (например, tb_001). Используйте этот tool для получения полного текста. Пример: {block_id: "tb_001"}. Возвращает {block_id, text} с полным содержимым.',
     inputSchema: {
@@ -169,31 +159,6 @@ const VSL_TOOLS = [
         },
       },
       required: ['block_id'],
-    },
-  },
-  {
-    name: 'vsl_download',
-    description: 'Управление скачиванием файлов через Playwright BrowserContext. Два режима: (1) target_id — клик по элементу (кнопка/ссылка для скачивания), инициирует download через Playwright; (2) value — прямое скачивание по URL (создаёт <a download> и кликает). Возвращает downloadId, filename, url, status (completed/failed/cancelled), path. Примеры: {target_id: btn_download} или {value: "https://example.com/file.pdf"}. Опционально: timeout (мс), save_path (путь для сохранения).',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        target_id: {
-          type: 'string',
-          description: 'ID элемента для клика (кнопка/ссылка для скачивания)',
-        },
-        value: {
-          type: 'string',
-          description: 'URL для прямого скачивания',
-        },
-        timeout: {
-          type: 'number',
-          description: 'Таймаут ожидания загрузки в мс (по умолчанию из config)',
-        },
-        save_path: {
-          type: 'string',
-          description: 'Путь для сохранения файла (опционально)',
-        },
-      },
     },
   },
 ];
@@ -230,10 +195,6 @@ export function registerTools(server: Server, config: McpServerConfig, sessionMa
           result = await handleGetSnapshot(args as never, browser, session, config);
           break;
 
-        case 'vsl_get_diff':
-          result = await handleGetDiff(session);
-          break;
-
         case 'vsl_execute_action':
           result = await handleExecuteAction(args as never, browser, session);
           break;
@@ -255,17 +216,10 @@ export function registerTools(server: Server, config: McpServerConfig, sessionMa
           result = await handleReadPage(args as never, browser, session, config);
           break;
 
-        case 'vsl_get_full_json':
-          result = await handleGetFullJson(args as never, session);
-          break;
-
         case 'vsl_get_text_block':
           result = await handleGetTextBlock(args as never, session);
           break;
 
-        case 'vsl_download':
-          result = await handleDownload(args as never, browser, session);
-          break;
         default:
           return {
             content: [

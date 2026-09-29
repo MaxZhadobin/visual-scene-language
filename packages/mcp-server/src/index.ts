@@ -77,12 +77,29 @@ async function main(): Promise<void> {
   // 7. Graceful shutdown — закрываем все сессии при завершении
   const shutdown = async () => {
     console.error('[VSL MCP Server] Shutting down...');
-    await sessionManager.closeAll();
+    try {
+      await sessionManager.closeAll();
+    } catch (error) {
+      console.error('[VSL MCP Server] Error during shutdown:', error);
+    }
     process.exit(0);
   };
 
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
+
+  // 8. Обработка необработанных исключений — предотвращает аварийное завершение
+  // и разрыв stdio соединения (MCP error -32000: Connection closed)
+  process.on('uncaughtException', (error) => {
+    console.error('[VSL MCP Server] Uncaught exception:', error);
+    // Не завершаем процесс — позволяем MCP SDK обработать ошибку
+    // и продолжить обслуживание запросов
+  });
+
+  process.on('unhandledRejection', (reason, promise) => {
+    console.error('[VSL MCP Server] Unhandled rejection at:', promise, 'reason:', reason);
+    // Не завершаем процесс — позволяем MCP SDK обработать ошибку
+  });
 }
 
 // Запуск сервера

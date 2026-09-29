@@ -71,7 +71,9 @@ s5_ts_lint() {
 
 # --- S6. Typecheck TypeScript-кода SDK: tsc --noEmit — §8 S6 (Phase 1, ревизия на TS-стек) ---
 s6_ts_typecheck() {
-  npm run typecheck
+  npm run typecheck && \
+  (cd packages/mcp-server && npm run typecheck) && \
+  (cd extension && npm run typecheck)
 }
 
 
@@ -79,7 +81,9 @@ s6_ts_typecheck() {
 # Порог 80% (statements/branches/functions/lines) зафиксирован в jest.config.js coverageThreshold —
 # jest завершается с ненулевым кодом при его нарушении. Решение о пороге: DEC-021 (DECISIONS.md).
 s7_ts_build_and_tests() {
-  npm run build && npm run test:coverage
+  npm run build && npm run test:coverage && \
+  (cd packages/mcp-server && npm run build && npm run test) && \
+  npm run build:extension
 }
 
 # Раннер шага: успех → '[SX] name ✅ ok'; провал → '[SX] name ❌ fail', stop-on-fail, exit 1.

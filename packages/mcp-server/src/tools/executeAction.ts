@@ -24,8 +24,10 @@ import type { ServerSession } from '../session/serverSession.js';
 import type { SnapshotInput } from '@thinkingos/vsl-sdk';
 
 import { computeToolMetrics } from '../utils/metrics.js';
-import { extractDomTreeInBrowser } from './getSnapshot.js';
+import { extractDomTree } from './getSnapshot.js';
 import { injectVslIdsIntoDom } from '../utils/injectVslIds.js';
+import { filterDiffByDetailLevel, filterObjectsByDetailLevel } from '../utils/detailLevelFilter.js';
+import { computeScrollable, computeVisibleWindow, filterDiffByViewport, filterObjectsByViewport, type ScrollableInfo, type ScrollContext } from '../utils/viewportFilter.js';
 
 /** Поддерживаемые действия. */
 const VALID_ACTIONS = [
@@ -55,6 +57,10 @@ export interface ExecuteActionArgs {
    * Default: true — всегда возвращать состояние для экономии ходов агента.
    */
   return_state?: boolean;
+  /** Таймаут ожидания завершения скачивания в мс (только для действия download; по умолчанию из config). */
+  timeout?: number;
+  /** Путь для сохранения файла (только для действия download; относительные пути разрешаются в downloadsPath с проверкой path traversal). */
+  save_path?: string;
 }
 /** Результат vsl_execute_action. */
 export interface ExecuteActionResult {
@@ -64,7 +70,7 @@ export interface ExecuteActionResult {
     action: string;
     target_id: string;
     success: boolean;
-    download?: { downloadId: string; filename: string; url: string; status: 'pending' | 'completed' | 'cancelled' | 'failed' };
+    download?: { downloadId: string; filename: string; url: string; status: 'completed' | 'cancelled' | 'failed'; path?: string };
     upload?: { selector: string; files: string[]; success: boolean };
     /** Обновлённое состояние страницы (если return_state=true). */
     state?: {
@@ -88,6 +94,8 @@ export interface StateAfterAction {
   diff?: unknown;
   snapshot?: unknown;
   error?: string;
+  /** Метаданные скролла (единый пайплайн отдачи, АС[3]). */
+  scrollable?: ScrollableInfo;
 }
 
 /**
@@ -100,31 +108,97 @@ async function getStateAfterAction(
   url: string,
 ): Promise<StateAfterAction> {
   try {
-    // Извлечь обновлённый DOM
-    const elements = await browser.evaluate(extractDomTreeInBrowser);
-    // Получить viewport для SnapshotInput
-    const viewport = await browser.evaluate(() => ({
-      width: window.innerWidth,
-      height: window.innerHeight,
-    }));
-    // Обновить snapshot в сессии
+    // Извлечь обновлённый DOM. Общий хелпер: прямая передача функции в
+    // evaluate + разворачивание обёртки (без разворачивания SDK падает
+    // с "reading 'aria-hidden'"). Viewport уже внутри обёртки — отдельный
+    // evaluate-вызов не нужен.
+    const extraction = await extractDomTree(browser);
+    // Обновить snapshot в сессии (scroll — для единого пайплайна отдачи, АС[3])
     const input: SnapshotInput = {
-      viewport: viewport as { width: number; height: number },
+      viewport: extraction.viewport,
       url,
       title: '',
       timestamp: new Date().toISOString(),
+      scroll: extraction.scroll,
     };
-    session.snapshotFromElements(elements as unknown[], input);
-    // Получить diff с момента предыдущего snapshot
-    const diff = session.getDiff();
-    // Получить полный snapshot
-    const snapshot = session.getSnapshot();
+    session.snapshotFromElements(extraction.elements, input);
+    // Полный документ — для инжекта data-vsl-id во ВСЕ элементы DOM
+    const fullDoc = session.getSnapshot();
     // Inject data-vsl-id attributes into DOM for subsequent actions
-    await injectVslIdsIntoDom(browser, snapshot.objects);
-    return { diff, snapshot };
+    await injectVslIdsIntoDom(browser, fullDoc.objects);
+    // Единый пайплайн отдачи (АС[3]): вьюпорт-фильтр по абсолютным
+    // координатам + скролл-контексту, затем дефолтный detail_level 'medium'
+    // (у тула нет параметра детализации).
+    const scrollContext = session.getScrollContext();
+    const win = computeVisibleWindow(fullDoc.canvas.viewport, scrollContext);
+    const scrollable = computeScrollable(fullDoc.canvas.viewport, scrollContext);
+    // Дифф фильтруется по видимому окну отдельно (структура changes)
+    const diff = session.getDiff();
+    const filteredDiff = diff
+      ? filterDiffByDetailLevel(
+          filterDiffByViewport(diff, fullDoc, session.getPreviousSnapshot(), win),
+          fullDoc,
+          'medium',
+        )
+      : diff;
+    const viewportFiltered = filterObjectsByViewport(fullDoc.objects, win);
+    const filteredObjects = filterObjectsByDetailLevel(viewportFiltered, 'medium');
+    const snapshot = { ...fullDoc, objects: filteredObjects };
+    return { diff: filteredDiff, snapshot, scrollable };
   } catch (error) {
     // Если не удалось получить состояние, возвращаем ошибку
     const errorMessage = `Failed to get state after action: ${error instanceof Error ? error.message : String(error)}`;
+    console.error('[vsl_execute_action]', errorMessage, error);
+    return { error: errorMessage };
+  }
+}
+
+/**
+ * Серверный фолбэк скролл-контекста (браузер вернул невалидные данные):
+ * старый контекст + дельта с клампом по размерам документа и вьюпорта.
+ */
+function serverSideScrollFallback(
+  prev: ScrollContext | null,
+  dx: number,
+  dy: number,
+  viewport?: { width: number; height: number },
+): ScrollContext {
+  const width = prev?.width ?? 0;
+  const height = prev?.height ?? 0;
+  const maxX = Math.max(0, width - (viewport?.width ?? 0));
+  const maxY = Math.max(0, height - (viewport?.height ?? 0));
+  return {
+    x: Math.min(Math.max(0, (prev?.x ?? 0) + dx), maxX),
+    y: Math.min(Math.max(0, (prev?.y ?? 0) + dy), maxY),
+    width,
+    height,
+  };
+}
+
+/**
+ * Скролл из кэша: состояние после действия scroll собирается из полного
+ * документа сессии БЕЗ ре-экстракции — вьюпорт-фильтр по новому
+ * скролл-контексту + дефолтная детализация 'medium' + метаданные скролла.
+ */
+function buildScrollStateFromCache(
+  session: ServerSession,
+  scrollContext: ScrollContext,
+): StateAfterAction {
+  try {
+    const fullDoc = session.getSnapshot();
+    const viewport = fullDoc.canvas?.viewport;
+    // Нет данных о вьюпорте — отдаём документ без вьюпорт-фильтрации.
+    if (!viewport || typeof viewport.width !== 'number' || typeof viewport.height !== 'number') {
+      return { snapshot: fullDoc };
+    }
+    const win = computeVisibleWindow(viewport, scrollContext);
+    const scrollable = computeScrollable(viewport, scrollContext);
+    const viewportFiltered = filterObjectsByViewport(fullDoc.objects ?? [], win);
+    const filteredObjects = filterObjectsByDetailLevel(viewportFiltered, 'medium');
+    const snapshot = { ...fullDoc, objects: filteredObjects };
+    return { snapshot, scrollable };
+  } catch (error) {
+    const errorMessage = `Failed to build scroll state from cache: ${error instanceof Error ? error.message : String(error)}`;
     console.error('[vsl_execute_action]', errorMessage, error);
     return { error: errorMessage };
   }
@@ -254,16 +328,17 @@ export async function handleExecuteAction(
     });
 
     if (!hasVslIds) {
-      // Автоматическое создание snapshot
-      const elements = await browser.evaluate(extractDomTreeInBrowser);
-      const viewport = await browser.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }));
+      // Автоматическое создание snapshot (общий хелпер с разворачиванием обёртки)
+      const extraction = await extractDomTree(browser);
       const input: SnapshotInput = {
-        viewport: viewport as { width: number; height: number },
+        viewport: extraction.viewport,
         url: snapshotUrl || '',
         title: '',
         timestamp: new Date().toISOString(),
+        // Метаданные скролла для единого пайплайна отдачи (АС[3])
+        scroll: extraction.scroll,
       };
-      session.snapshotFromElements(elements as unknown[], input);
+      session.snapshotFromElements(extraction.elements, input);
     }
 
     const selector = `[data-vsl-id="${args.target_id}"], #${args.target_id}, .${args.target_id}`;
@@ -299,11 +374,64 @@ export async function handleExecuteAction(
         const scrollAmount = scrollParts[1] !== undefined ? Number(scrollParts[1]) : DEFAULT_SCROLL_AMOUNT;
         const dx = scrollDir === 'left' ? -scrollAmount : scrollDir === 'right' ? scrollAmount : 0;
         const dy = scrollDir === 'up' ? -scrollAmount : scrollDir === 'down' ? scrollAmount : 0;
+        // Скролл выполняется в браузере (нужен для скриншотов и последующих
+        // действий), но ответ собирается ИЗ КЭША без ре-экстракции.
         await browser.evaluate(({ dx, dy }: { dx: number; dy: number }) => {
           window.scrollBy(dx, dy);
         }, { dx, dy });
         await page.waitForTimeout(50);
-        break;
+
+        // Новый скролл-контекст: один лёгкий evaluate читает реальный скролл;
+        // при невалидном результате — серверный фолбэк по дельте.
+        const prevScroll = session.getScrollContext();
+        let newScroll: ScrollContext | null = null;
+        try {
+          const raw = await browser.evaluate(() => ({
+            x: window.scrollX,
+            y: window.scrollY,
+            width: document.documentElement.scrollWidth,
+            height: document.documentElement.scrollHeight,
+          }));
+          const r = raw as ScrollContext | null;
+          if (
+            r !== null && typeof r === 'object' &&
+            typeof r.x === 'number' && typeof r.y === 'number' &&
+            typeof r.width === 'number' && typeof r.height === 'number'
+          ) {
+            newScroll = r;
+          }
+        } catch {
+          // Чтение скролла не удалось — используется серверный фолбэк.
+        }
+        if (!newScroll) {
+          newScroll = serverSideScrollFallback(prevScroll, dx, dy, session.getSnapshot().canvas?.viewport);
+        }
+        session.setScrollContext(newScroll);
+
+        const scrollResult: ExecuteActionResult = {
+          status: 'success',
+          data: {
+            action: args.action,
+            target_id: args.target_id,
+            success: true,
+          },
+        };
+
+        // Состояние после скролла фильтруется из полного документа по новому
+        // скролл-контексту без ре-экстракции. Дифф не отдаётся: контент
+        // страницы при скролле не меняется.
+        if (args.return_state !== false) {
+          const state = buildScrollStateFromCache(session, newScroll);
+          if (scrollResult.data) {
+            scrollResult.data.state = state;
+            if (state.error) {
+              scrollResult.warning = `State extraction failed: ${state.error}`;
+            }
+          }
+        }
+
+        scrollResult.metadata = computeToolMetrics(scrollResult.data, startTime);
+        return scrollResult;
       }
 
       case 'select':
@@ -356,56 +484,83 @@ export async function handleExecuteAction(
 
 
       case 'download': {
-        // Гибридный подход: target_id — клик по элементу, value — прямое скачивание по URL
+        // Реальное скачивание через Playwright (Фаза 3: перенос из удалённого тула vsl_download).
+        // value — прямое скачивание по URL (<a download> + клик),
+        // иначе — клик по элементу (кнопка/ссылка для скачивания).
+        const downloadsBefore = browser.getDownloads();
+
         if (args.value) {
-          // Прямое скачивание по URL (target_id опционален для этого режима)
-          const downloadId = await browser.evaluate((url: string) => {
+          await browser.evaluate((url: string) => {
             const a = document.createElement('a');
             a.href = url;
             a.download = '';
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
-            const id = `download_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-            return id;
           }, args.value);
-          const filename = args.value.split('/').pop() || 'download';
-          const result: ExecuteActionResult = {
-            status: 'success',
-            data: {
-              action: args.action,
-              target_id: args.target_id,
-              success: true,
-              download: {
-                downloadId,
-                filename,
-                url: args.value,
-                status: 'pending',
-              },
-            },
-          };
+        } else {
+          await browser.evaluate((sel: string) => {
+            const el = document.querySelector(sel);
+            if (el) (el as HTMLElement).click();
+          }, selector);
+        }
 
-          // Добавить состояние страницы, если запрошено
-          if (args.return_state !== false) {
-            const currentUrl = await browser.evaluate(() => window.location.href);
-            const state = await getStateAfterAction(session, browser, currentUrl as string);
-            if (result.data) {
-              result.data.state = state;
-              if (state.error) {
-                result.warning = `State extraction failed: ${state.error}`;
-              }
+        // Ждём регистрацию загрузки в activeDownloads (context.on('download'))
+        const pollDeadline = Date.now() + 5000;
+        let newDownload: { downloadId: string; filename: string; url: string } | undefined;
+        while (!newDownload && Date.now() <pollDeadline) {
+          newDownload = browser.getDownloads().find(
+            d => !downloadsBefore.some(b => b.downloadId === d.downloadId),
+          );
+          if (!newDownload) {
+            await browser.evaluate(() => new Promise<void>(resolve => setTimeout(resolve, 50)));
+          }
+        }
+
+        if (!newDownload) {
+          return {
+            status: 'error',
+            error: 'Download not detected after click (timeout 5000ms). The page may navigate instead of downloading.',
+          };
+        }
+
+        // Ожидаем завершение загрузки и опционально сохраняем файл
+        // (проверка path traversal для относительных путей — внутри browser.saveDownload)
+        const downloadInfo = await browser.waitForDownload(newDownload.downloadId, args.timeout);
+        if (args.save_path) {
+          await browser.saveDownload(downloadInfo.downloadId, args.save_path);
+        }
+
+        const result: ExecuteActionResult = {
+          status: 'success',
+          data: {
+            action: args.action,
+            target_id: args.target_id,
+            success: downloadInfo.status === 'completed',
+            download: {
+              downloadId: downloadInfo.downloadId,
+              filename: downloadInfo.filename,
+              url: downloadInfo.url,
+              status: downloadInfo.status,
+              path: args.save_path ?? downloadInfo.path ?? undefined,
+            },
+          },
+        };
+
+        // Добавить состояние страницы, если запрошено
+        if (args.return_state !== false) {
+          const currentUrl = await browser.evaluate(() => window.location.href);
+          const state = await getStateAfterAction(session, browser, currentUrl as string);
+          if (result.data) {
+            result.data.state = state;
+            if (state.error) {
+              result.warning = `State extraction failed: ${state.error}`;
             }
           }
-
-          result.metadata = computeToolMetrics(result.data, startTime);
-          return result;
         }
-        // Клик по элементу (кнопка/ссылка для скачивания)
-        await browser.evaluate((sel: string) => {
-          const el = document.querySelector(sel);
-          if (el) (el as HTMLElement).click();
-        }, selector);
-        break;
+
+        result.metadata = computeToolMetrics(result.data, startTime);
+        return result;
       }
 
       case 'upload': {

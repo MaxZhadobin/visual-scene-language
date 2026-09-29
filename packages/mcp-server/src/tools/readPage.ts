@@ -17,11 +17,13 @@
 import type { BrowserManager } from '../browser/manager.js';
 import type { ServerSession } from '../session/serverSession.js';
 import type { McpServerConfig } from '../config/loader.js';
+import type { VslDocument, VslObject } from '@thinkingos/vsl-sdk';
 import { computeToolMetrics } from '../utils/metrics.js';
 import { extractViaHttp, detectSpa, applyReadableFilter, extractTextContent, extractTitle, countWords } from './httpExtractor.js';
-
-/** Уровни детализации snapshot (DEC-027). */
-export type DetailLevel = 'low' | 'medium' | 'high';
+import { filterDiffByDetailLevel, filterObjectsByDetailLevel, type DetailLevel } from '../utils/detailLevelFilter.js';
+import { extractDomTree } from './getSnapshot.js';
+import { injectVslIdsIntoDom } from '../utils/injectVslIds.js';
+import { computeScrollable, computeVisibleWindow, filterDiffByViewport, filterObjectsByViewport, type ScrollableInfo } from '../utils/viewportFilter.js';
 
 /** Аргументы vsl_read_page. */
 export interface ReadPageArgs {
@@ -62,6 +64,8 @@ export interface ReadPageResult {
       vsl_estimated_tokens?: number;
       /** Количество объектов в VSL snapshot. */
       vsl_object_count?: number;
+      /** Метаданные скролла (единый пайплайн отдачи, АС[3]). */
+      scrollable?: ScrollableInfo;
     };
   };
   error?: string;
@@ -153,29 +157,56 @@ export async function handleReadPage(
       // Проверка на SPA (после рендера — более точная)
       const isSpa = detectSpa(html);
 
-      // Извлечение VSL-документа через evaluate()
-      const vslDocument = await extractVslFromPage(browser);
-
-      // Сохранение в session для диффов
+      // Единый пайплайн отдачи (АС[3]): полный документ через SDK-пайплайн
+      // (как в getSnapshot) + инжект data-vsl-id для execute_action.
+      // При сбое — фолбэк на кустарное извлечение (устойчивость).
       const hadPreviousSnapshot = session.hasSnapshot();
-      session.setSnapshot(vslDocument as never);
+      try {
+        const extraction = await extractDomTree(browser);
+        session.snapshotFromElements(extraction.elements, {
+          viewport: extraction.viewport,
+          url: args.url,
+          title: extractTitle(html) || '',
+          timestamp: new Date().toISOString(),
+          scroll: extraction.scroll,
+        });
+        await injectVslIdsIntoDom(browser, session.getSnapshot().objects);
+      } catch (extractError) {
+        console.error('[vsl_read_page] SDK extraction failed, falling back to legacy extraction:', extractError);
+        const fallbackDoc = await extractVslFromPage(browser);
+        session.setSnapshot(fallbackDoc as never);
+      }
       const hasDiff = hadPreviousSnapshot;
 
       // Readable-режим: фильтрация шума
       const readableHtml = readable ? applyReadableFilter(html) : html;
       const content = extractTextContent(readableHtml);
 
-      // Получить snapshot и diff из session, применить фильтрацию по detail_level (DEC-027)
-      const rawSnapshot = session.getSnapshot() as Record<string, unknown> | undefined;
+      // Получить ПОЛНЫЙ документ из session и прогнать через единый пайплайн
+      // отдачи: вьюпорт-фильтр по абсолютным координатам + скролл-контексту,
+      // затем фильтрация по detail_level (DEC-027).
+      const rawSnapshot = session.getSnapshot();
       const rawDiff = hasDiff ? session.getDiff() : undefined;
-      const fullSnapshot = rawSnapshot ? applyDetailLevelFilter(rawSnapshot, detailLevel) : undefined;
-      const fullDiff = rawDiff ? applyDetailLevelFilter(rawDiff, detailLevel) : undefined;
+      const scrollContext = session.getScrollContext();
+      const win = computeVisibleWindow(rawSnapshot.canvas.viewport, scrollContext);
+      const scrollable = computeScrollable(rawSnapshot.canvas.viewport, scrollContext);
+      const viewportFiltered = filterObjectsByViewport(rawSnapshot.objects, win);
+      const filteredObjects = filterObjectsByDetailLevel(viewportFiltered, detailLevel);
+      const fullSnapshot = { ...rawSnapshot, objects: filteredObjects };
+      // Дифф фильтруется по видимому окну отдельно (структура changes)
+      const fullDiff = rawSnapshot && rawDiff
+        ? filterDiffByDetailLevel(
+            filterDiffByViewport(rawDiff, rawSnapshot, session.getPreviousSnapshot(), win),
+            rawSnapshot,
+            detailLevel,
+          )
+        : rawDiff;
 
       const data = {
         url: args.url,
         mode: 'render' as const,
         content,
-        vslDocument,
+        vslDocument: rawSnapshot,
         snapshot: fullSnapshot,
         diff: fullDiff,
         hasDiff,
@@ -186,6 +217,7 @@ export async function handleReadPage(
           readableApplied: readable,
           detail_level: detailLevel,
           ...computeVslMetrics(fullSnapshot),
+          scrollable,
         },
       };
 
@@ -206,11 +238,25 @@ export async function handleReadPage(
     session.setSnapshot(httpResult.vslDocument as never);
     const hasDiff = hadPreviousSnapshot;
 
-    // Получить snapshot и diff из session, применить фильтрацию по detail_level (DEC-027)
-    const rawSnapshot = session.getSnapshot() as Record<string, unknown> | undefined;
+    // Получить snapshot и diff из session и прогнать через единый пайплайн
+    // отдачи (АС[3]). Для HTTP-документов (p = null) вьюпорт-фильтр прозрачен —
+    // все объекты пропускаются, компактность сохранена.
+    const rawSnapshot = session.getSnapshot();
     const rawDiff = hasDiff ? session.getDiff() : undefined;
-    const fullSnapshot = rawSnapshot ? applyDetailLevelFilter(rawSnapshot, detailLevel) : undefined;
-    const fullDiff = rawDiff ? applyDetailLevelFilter(rawDiff, detailLevel) : undefined;
+    const scrollContext = session.getScrollContext();
+    const win = computeVisibleWindow(rawSnapshot.canvas.viewport, scrollContext);
+    const scrollable = computeScrollable(rawSnapshot.canvas.viewport, scrollContext);
+    const viewportFiltered = filterObjectsByViewport(rawSnapshot.objects, win);
+    const filteredObjects = filterObjectsByDetailLevel(viewportFiltered, detailLevel);
+    const fullSnapshot = { ...rawSnapshot, objects: filteredObjects };
+    // Дифф фильтруется по видимому окну отдельно (структура changes)
+    const fullDiff = rawSnapshot && rawDiff
+      ? filterDiffByDetailLevel(
+          filterDiffByViewport(rawDiff, rawSnapshot, session.getPreviousSnapshot(), win),
+          rawSnapshot,
+          detailLevel,
+        )
+      : rawDiff;
 
     const data = {
       url: args.url,
@@ -227,6 +273,7 @@ export async function handleReadPage(
         readableApplied: httpResult.readableApplied,
         detail_level: detailLevel,
         ...computeVslMetrics(fullSnapshot),
+        scrollable,
       },
     };
 
@@ -329,91 +376,11 @@ async function extractVslFromPage(browser: BrowserManager): Promise<unknown> {
     ],
   };
 }
-/**
- * Применяет фильтрацию объектов VSL по уровню детализации (DEC-027).
- * - 'low': только интерактивные элементы (кнопки, ссылки, инпуты)
- * - 'medium': интерактивные + контейнеры
- * - 'high': все объекты (без фильтрации)
- */
-function applyDetailLevelFilter(
-  document: Record<string, unknown>,
-  level: DetailLevel,
-): Record<string, unknown> {
-  if (level === 'high') return document;
-
-  const objects = document.objects as Array<Record<string, unknown>> | undefined;
-  if (!objects || !Array.isArray(objects)) return document;
-
-  const INTERACTIVE_TYPES = new Set([
-    'button', 'link', 'input', 'select', 'checkbox', 'radio',
-    'textarea', 'file', 'submit', 'reset',
-  ]);
-
-  const CONTAINER_TYPES = new Set([
-    'div', 'section', 'article', 'nav', 'header', 'footer',
-    'main', 'aside', 'form', 'fieldset',
-  ]);
-
-  function filterRecursive(obj: Record<string, unknown>): Record<string, unknown> | null {
-    const type = (obj.t || obj.type || '') as string;
-
-    if (level === 'low') {
-      // Только интерактивные элементы
-      if (!INTERACTIVE_TYPES.has(type)) {
-        // Проверяем детей — если есть интерактивные дети, возвращаем контейнер
-        const children = obj.ch || obj.children;
-        if (children && Array.isArray(children) && children.length > 0) {
-          const filteredChildren = children
-            .map(filterRecursive)
-            .filter((child): child is Record<string, unknown> => child !== null);
-          if (filteredChildren.length > 0) {
-            return { ...obj, ch: filteredChildren };
-          }
-        }
-        return null;
-      }
-      return obj;
-    }
-
-    if (level === 'medium') {
-      // Интерактивные + контейнеры
-      if (INTERACTIVE_TYPES.has(type) || CONTAINER_TYPES.has(type)) {
-        const children = obj.ch || obj.children;
-        if (children && Array.isArray(children) && children.length > 0) {
-          const filteredChildren = children
-            .map(filterRecursive)
-            .filter((child): child is Record<string, unknown> => child !== null);
-          return { ...obj, ch: filteredChildren };
-        }
-        return obj;
-      }
-      // Проверяем детей
-      const children = obj.ch || obj.children;
-      if (children && Array.isArray(children) && children.length > 0) {
-        const filteredChildren = children
-          .map(filterRecursive)
-          .filter((child): child is Record<string, unknown> => child !== null);
-        if (filteredChildren.length > 0) {
-          return { ...obj, ch: filteredChildren };
-        }
-      }
-      return null;
-    }
-
-    return obj;
-  }
-
-  const filteredObjects = objects
-    .map(filterRecursive)
-    .filter((obj): obj is Record<string, unknown> => obj !== null);
-
-  return { ...document, objects: filteredObjects };
-}
 
 /**
  * Вычисляет метрики VSL snapshot для включения в ответ.
  */
-function computeVslMetrics(snapshot: Record<string, unknown> | undefined): {
+function computeVslMetrics(snapshot: VslDocument | undefined): {
   vsl_size_bytes?: number;
   vsl_estimated_tokens?: number;
   vsl_object_count?: number;
@@ -426,17 +393,14 @@ function computeVslMetrics(snapshot: Record<string, unknown> | undefined): {
     const estimatedTokens = Math.ceil(sizeBytes / 4);
 
     // Подсчёт количества объектов
-    const objects = snapshot.objects as Array<Record<string, unknown>> | undefined;
+    const objects = snapshot.objects;
     let objectCount = 0;
     if (objects && Array.isArray(objects)) {
-      function countRecursive(obj: Record<string, unknown>): number {
+      function countRecursive(obj: VslObject): number {
         let count = 1;
-        const children = obj.ch || obj.children;
-        if (children && Array.isArray(children)) {
-          for (const child of children) {
-            if (child && typeof child === 'object') {
-              count += countRecursive(child as Record<string, unknown>);
-            }
+        if (obj.ch && Array.isArray(obj.ch)) {
+          for (const child of obj.ch) {
+            count += countRecursive(child);
           }
         }
         return count;

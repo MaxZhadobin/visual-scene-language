@@ -124,7 +124,7 @@ export interface VslObject {
   t: VslType;
   /** Роль (атрибут role), уточняет семантику. */
   r?: string;
-  /** Позиция [x, y] — относительные координаты 0.0–1.0 от viewport. */
+  /** Позиция [x, y] — абсолютные страница-релятивные пиксельные координаты (АС[2]). */
   p: [number, number];
   /** Размер [width, height] в px. */
   s: [number, number];

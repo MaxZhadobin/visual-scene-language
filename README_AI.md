@@ -126,6 +126,7 @@ VSL JSON оптимизирован для LLM-контекста:
 - **Умные дефолты**: не пишем то, что можно вывести
 - **Нет избыточности**: не дублируем информацию
 - **Lazy Text Loading (M1.7, DEC-026)**: длинные тексты (> 200 символов) заменяются на `txt_preview` + `txt_ref`, полные тексты кэшируются в `text_blocks`
+- **Style Stripping (DEC-029)**: при `detail_level` low/medium поле `sty` (визуальные стили: bg, fg, border, radius, shadow, font) автоматически удаляется из объектов. LLM-агент не видит страницу визуально и редко нуждается в computed styles. Для визуального понимания используется `vsl_get_visual`. При `detail_level: high` стили сохраняются
 
 {
   "vsl_version": "1.0.0",
@@ -215,28 +216,56 @@ VSL поддерживает полный набор действий:
 
 ### 4.6 VSL ID Format
 
-VSL ID — уникальный идентификатор элемента в VSL JSON. Формат:
+VSL ID — уникальный идентификатор элемента в VSL JSON. Генерация ID реализована в `src/utils/idGenerator.ts` (класс `IdGenerator`, factory `createIdGenerator()`).
 
-`${tag}_${indexPath.join('_')}`
+**Стратегия генерации (приоритеты):**
 
-где:
-- **tag** — тип элемента (button, input, link, file_input, custom_widget и т.д.)
-- **indexPath** — массив индексов, описывающих путь от корня DOM-дерева до элемента
+1. **Приоритет 1: DOM `id`** — если у элемента есть атрибут `id` (непустой), он используется как VSL ID. Это обеспечивает стабильность между перезагрузками страницы и читаемость при отладке.
+
+2. **Приоритет 2: Per-type counter fallback** — если DOM `id` отсутствует, генерируется короткий ID с сокращённым типом и per-type счётчиком:
+
+   `abbreviation_counter`
+
+   где:
+   - **abbreviation** — сокращение VSL-типа из таблицы `TYPE_ABBREVIATIONS`
+   - **counter** — per-type счётчик (отдельный для каждого типа, начинается с 1)
+
+**Таблица сокращений (TYPE_ABBREVIATIONS):**
+
+| VSL Type | Abbreviation | | VSL Type | Abbreviation |
+|----------|-------------|---|----------|-------------|
+| button | btn | | image | img |
+| input | inp | | select | sel |
+| link | link | | textarea | txt |
+| container | cont | | heading | h |
+| text | txt | | file_input | file |
+| modal | modal | | tab | tab |
+| dropdown_toggle | dropdown | | footer | footer |
+| scrollable_container | scroll | | toolbar | toolbar |
+| list | list | | grid | grid |
+| form_field | form | | tab_bar | tabs |
+| layout | layout | | nav | nav |
+| header | header | | main | main |
+| icon | icon | | chart | chart |
+| custom_widget | widget | | unknown | el |
 
 **Примеры:**
-- `button_0_1` → { tag: 'button', indexPath: [0, 1] }
-- `file_input_0_1` → { tag: 'file_input', indexPath: [0, 1] }
-- `custom_widget_2_3_4` → { tag: 'custom_widget', indexPath: [2, 3, 4] }
-- `h1_0_1` → { tag: 'h1', indexPath: [0, 1] }
+- `btn_1` — первая кнопка без DOM id
+- `inp_2` — второй input без DOM id
+- `cont_3` — третий container без DOM id
+- `submit` — элемент с DOM `id="submit"` (приоритет 1)
 
-**Важно:** Некоторые теги содержат underscore (file_input, dropdown_toggle, scrollable_container, form_field, tab_bar, custom_widget). Функция `parseVslId()` корректно разделяет tag и indexPath, используя regex, который гарантирует, что underscore в tag части всегда предшествует буквенному сегменту (не числовому).
+**Ключевые свойства:**
+- **Per-type counters** обеспечивают стабильность: добавление новой кнопки НЕ сдвигает ID навигации, ссылок или контейнеров. Только элементы того же типа получают новые номера.
+- **Детерминизм**: ID генерируются в порядке обхода DOM-дерева, что гарантирует воспроизводимость.
+- **ID генерируются ДО viewport culling** — все элементы (включая offscreen) получают ID, затем offscreen фильтруются. Это обеспечивает стабильность ID между snapshots.
 
 **Использование:**
 - VSL ID записывается в DOM-атрибут `data-vsl-id` для последующего взаимодействия через `execute_action`
-- Функция `parseVslId()` (packages/mcp-server/src/utils/vslIdParser.ts) парсит ID и возвращает структуру `{ tag, indexPath }`
-- Inline-копия `parseVslId()` используется в `getSnapshot.ts` внутри `browser.evaluate()` для обхода DOM-дерева и установки атрибутов `data-vsl-id`
+- `IdGenerator` создаётся заново для каждого snapshot (через `createIdGenerator()`)
+- HTTP-путь (`httpExtractor.ts`) и browser-путь (`vslBuilder.ts`) используют единый `IdGenerator` из SDK
 
-**Тестовое покрытие:** 27 юнит-тестов в `vslIdParser.test.ts` покрывают все сценарии: простые теги, теги с underscore, различные глубины indexPath, невалидные ID и edge cases. Покрытие: 100% (Statements, Branches, Functions, Lines).
+**Тестовое покрытие:** Интеграционные тесты (`vslBuilder.test.ts`, `snapshotSession.test.ts`, `snapshot.integration.test.ts`, `cache-diff.integration.test.ts`) покрывают ID генерацию через полный pipeline.
 
 
 ---
@@ -539,7 +568,7 @@ MCP (Model Context Protocol) Server — рекомендуемый способ 
 
 | Tool | Описание |
 |------|----------|
-| `vsl_get_snapshot` | Получить VSL snapshot текущего экрана. Параметры: `url` (опционально), `detail_level` (low/medium/high, default: high), `ttl` (кэш в мс, default: 5000). Поддерживает lazy text loading (DEC-026): длинные тексты >200 символов заменяются на `txt_preview` + `txt_ref`, полные тексты в `text_blocks`. Возвращает метрики: `json_size_bytes`, `estimated_tokens`, `object_count`, `execution_time_ms` |
+| `vsl_get_snapshot` | Получить VSL snapshot текущего экрана. Параметры: `url` (опционально), `detail_level` (low/medium/high, default: medium), `ttl` (кэш в мс, default: 5000), `include_offscreen` (boolean, default: false — viewport culling). **Viewport culling** (DEC-027): по умолчанию исключает offscreen элементы, экономя 50-80% токенов на длинных страницах. **Style stripping** (DEC-029): при detail_level low/medium автоматически удаляется поле `sty` (визуальные стили) из объектов; при `high` стили сохраняются для полного визуального анализа. Поддерживает lazy text loading (DEC-026): длинные тексты >200 символов заменяются на `txt_preview` + `txt_ref`, полные тексты в `text_blocks`. Возвращает метрики: `json_size_bytes`, `estimated_tokens`, `object_count` (shown), `total_objects_count` (total до culling), `culled_offscreen_count`, `execution_time_ms`. **Workflow для offscreen контента**: если `culled_offscreen_count > 0`, значит часть страницы скрыта. Чтобы увидеть offscreen элементы, используйте `vsl_execute_action` с `scroll` (например, `{action: 'scroll', target_id: 'btn_1', value: 'down:500'}`), затем повторно вызовите `vsl_get_snapshot` для получения новой порции элементов. |
 | `vsl_get_diff` | Получить только изменения с последнего snapshot. Возвращает метрики производительности |
 | `vsl_execute_action` | Выполнить действие (click, type, scroll, navigate, и др.). Lazy Navigation (DEC-028): автоматически навигирует браузер на URL из snapshot. **Автоматическое создание snapshot**: если в DOM нет атрибутов `data-vsl-id` (например, после `vsl_read_page`), автоматически создаёт snapshot для инжекта атрибутов — не нужно вручную вызывать `vsl_get_snapshot` перед действием. Параметр `return_state: true` возвращает **diff И полный snapshot** после действия (удобно для отслеживания изменений). **Стабилизация DOM**: после выполнения действия (click/type/scroll) ожидает 100ms для завершения async операций и рендеринга перед извлечением состояния. Валидация input параметров (DEC-030). **Graceful error handling (DEC-031)**: при сбое извлечения состояния после действия возвращает `warning` (root level) и `state.error` вместо молчаливого `{status: success}` без данных |
 | `vsl_cache_clear` | Очистить кэш snapshots. Возвращает метрики производительности |

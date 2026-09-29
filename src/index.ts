@@ -6,6 +6,10 @@
  *  - LLM Integration (M1.3): LLM Adapter (OpenAI/Anthropic), Action Model, промпты и retry.
  */
 
+// ——— M1.7: ID Generator (унифицированная генерация ID) ———
+
+export { IdGenerator, createIdGenerator, TYPE_ABBREVIATIONS } from './utils/idGenerator';
+
 // ——— M1.1: Snapshot generation (сохранено полностью) ———
 
 export { extractDomTree, ownText } from './capture/domExtractor';
@@ -92,4 +96,20 @@ export { resolveTarget } from './executor/resolveTarget';
 export { ActionExecutionError } from './executor/types';
 export type { ActionResult, ExecutorOptions } from './executor/types';
 
+
+// ——— M1.8: Prompt Injection Filter (T1.8.1-T1.8.5) ———
+
+export { PromptInjectionFilter, getGlobalFilter, createFilter } from './security/promptInjectionFilter';
+export type {
+  FilterOptions,
+  InjectionPattern,
+  ScanResult,
+  Detection,
+  SecurityLogEntry,
+  PatternType,
+  Severity,
+  FilterAction,
+} from './security/promptInjectionFilter';
+export { RemotePatternsLoader } from './security/remotePatternsLoader';
+export type { RemotePatternsLoaderOptions, RemotePatternsResult } from './security/remotePatternsLoader';
 export const VSL_SDK_VERSION = '0.1.0';

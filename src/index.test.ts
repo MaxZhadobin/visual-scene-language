@@ -51,7 +51,7 @@ describe('публичное API (src/index.ts)', () => {
     });
     expect(doc.vsl_version).toBe('1.0.0');
     expect(doc.objects).toHaveLength(1);
-    expect(doc.objects[0]!.id).toBe('button_0');
+    expect(doc.objects[0]!.id).toBe('button_0'); // id = tag_indexPath идентично data-vsl-id
     expect(doc.objects[0]!.t).toBe('button');
   });
 });

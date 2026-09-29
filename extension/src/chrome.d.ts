@@ -83,6 +83,7 @@ interface ChromeStorageArea {
 
 interface ChromeStorage {
   local: ChromeStorageArea;
+  onChanged: ChromeEvent<ChromeStorageChangeEvent>;
 }
 
 declare const chrome: {

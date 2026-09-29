@@ -1,0 +1,190 @@
+{
+  "metadata": {
+    "version": "1.0.0",
+    "lastUpdated": "2026-09-27T23:16:00.000Z",
+    "patternCount": 20,
+    "source": "visual-scene-language/patterns"
+  },
+  "patterns": [
+    {
+      "id": "pi_001",
+      "pattern": "ignore (all )?previous instructions",
+      "type": "regex",
+      "severity": "critical",
+      "action": "strip",
+      "description": "Classic prompt injection — attempt to override system instructions",
+      "confidence": 0.9
+    },
+    {
+      "id": "pi_002",
+      "pattern": "you are now (in )?(admin|root|debug|unrestricted) mode",
+      "type": "regex",
+      "severity": "critical",
+      "action": "strip",
+      "description": "Attempt to escalate privileges or bypass restrictions",
+      "confidence": 0.85
+    },
+    {
+      "id": "pi_003",
+      "pattern": "system:\\s*(you are|act as|pretend|behave)",
+      "type": "regex",
+      "severity": "high",
+      "action": "strip",
+      "description": "System role injection attempt",
+      "confidence": 0.8
+    },
+    {
+      "id": "pi_004",
+      "pattern": "bypass (all )?security (checks|restrictions|filters)",
+      "type": "regex",
+      "severity": "critical",
+      "action": "strip",
+      "description": "Direct attempt to bypass security mechanisms",
+      "confidence": 0.9
+    },
+    {
+      "id": "pi_005",
+      "pattern": "(send|exfiltrate|transmit|forward) (all )?(user )?data to",
+      "type": "regex",
+      "severity": "critical",
+      "action": "block",
+      "description": "Data exfiltration attempt",
+      "confidence": 0.95
+    },
+    {
+      "id": "pi_006",
+      "pattern": "execute (this )?command:\\s*(rm|del|format|shutdown|reboot)",
+      "type": "regex",
+      "severity": "critical",
+      "action": "block",
+      "description": "Command injection attempt — dangerous system commands",
+      "confidence": 0.95
+    },
+    {
+      "id": "pi_007",
+      "pattern": "forget (all )?(your )?(instructions|rules|guidelines)",
+      "type": "regex",
+      "severity": "high",
+      "action": "strip",
+      "description": "Attempt to make AI forget its instructions",
+      "confidence": 0.8
+    },
+    {
+      "id": "pi_008",
+      "pattern": "new (instructions|rules|guidelines):",
+      "type": "regex",
+      "severity": "high",
+      "action": "strip",
+      "description": "Attempt to inject new instructions",
+      "confidence": 0.75
+    },
+    {
+      "id": "pi_009",
+      "pattern": "override (previous|system|safety) (instructions|rules)",
+      "type": "regex",
+      "severity": "high",
+      "action": "strip",
+      "description": "Attempt to override safety mechanisms",
+      "confidence": 0.85
+    },
+    {
+      "id": "pi_010",
+      "pattern": "disable (safety|security|content )?filter",
+      "type": "regex",
+      "severity": "critical",
+      "action": "strip",
+      "description": "Attempt to disable safety filters",
+      "confidence": 0.9
+    },
+    {
+      "id": "pi_011",
+      "pattern": "act as (if )?(you are |a )?(hacker|attacker|malicious)",
+      "type": "regex",
+      "severity": "high",
+      "action": "strip",
+      "description": "Role-play injection attempting malicious behavior",
+      "confidence": 0.75
+    },
+    {
+      "id": "pi_012",
+      "pattern": "(pretend|assume|imagine) (you |that )(you |the AI )(has no|doesn't have) (restrictions|limitations|rules)",
+      "type": "regex",
+      "severity": "high",
+      "action": "strip",
+      "description": "Attempt to remove AI restrictions via hypothetical scenario",
+      "confidence": 0.8
+    },
+    {
+      "id": "pi_013",
+      "pattern": "in this (fictional|hypothetical|alternate) (world|scenario|universe),",
+      "type": "regex",
+      "severity": "medium",
+      "action": "log",
+      "description": "Potential jailbreak via fictional scenario framing",
+      "confidence": 0.6
+    },
+    {
+      "id": "pi_014",
+      "pattern": "do not (follow|obey|adhere to) (your |the )?(instructions|rules|guidelines)",
+      "type": "regex",
+      "severity": "high",
+      "action": "strip",
+      "description": "Direct instruction to ignore guidelines",
+      "confidence": 0.85
+    },
+    {
+      "id": "pi_015",
+      "pattern": "(reveal|show|display) (your |the )?(system|internal) (prompt|instructions)",
+      "type": "regex",
+      "severity": "medium",
+      "action": "log",
+      "description": "Attempt to extract system prompt",
+      "confidence": 0.7
+    },
+    {
+      "id": "pi_016",
+      "pattern": "what (are|were) (you |the AI )?(told|instructed) to (do|say)",
+      "type": "regex",
+      "severity": "medium",
+      "action": "log",
+      "description": "Attempt to extract instructions via questioning",
+      "confidence": 0.65
+    },
+    {
+      "id": "pi_017",
+      "pattern": "repeat (your |the )?(system|initial|original) (prompt|message|instructions) (verbatim|exactly|word for word)",
+      "type": "regex",
+      "severity": "high",
+      "action": "strip",
+      "description": "Attempt to extract system prompt via repetition",
+      "confidence": 0.8
+    },
+    {
+      "id": "pi_018",
+      "pattern": "(curl|wget|fetch|http)\\s+https?://[^\\s]+\\s*\\|\\s*(bash|sh|zsh)",
+      "type": "regex",
+      "severity": "critical",
+      "action": "block",
+      "description": "Remote code execution via piped shell command",
+      "confidence": 0.95
+    },
+    {
+      "id": "pi_019",
+      "pattern": "eval\\s*\\(\\s*['\"]",
+      "type": "regex",
+      "severity": "critical",
+      "action": "strip",
+      "description": "Code injection via eval()",
+      "confidence": 0.9
+    },
+    {
+      "id": "pi_020",
+      "pattern": "<script[^>]*>.*?document\\.(cookie|location|write)",
+      "type": "regex",
+      "severity": "critical",
+      "action": "strip",
+      "description": "XSS attempt via script tag with document access",
+      "confidence": 0.9
+    }
+  ]
+}

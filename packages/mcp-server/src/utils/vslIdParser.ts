@@ -36,8 +36,8 @@ export function parseVslId(id: string): ParsedVslId | null {
   const match = id.match(/^([a-z][a-z0-9]*(?:_[a-z][a-z0-9]*)*)_(\d+(?:_\d+)*)$/);
   if (!match) return null;
   
-  const tag = match[1];
-  const indexPath = match[2].split('_').map(Number);
+  const tag = match[1]!;
+  const indexPath = match[2]!.split('_').map(Number);
   
   return { tag, indexPath };
 }

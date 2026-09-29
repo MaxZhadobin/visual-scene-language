@@ -13,9 +13,10 @@
  *    контракта «== 0 с семантическими детьми → grouping» на зазор 1–2);
  *  - иначе — декоративный, пропускается вместе с поддеревом.
  *
- * Детерминизм (решение для M1.2 Cache/Diff): id = tag_indexPath из DOM-пути,
- * без Date.now()/Math.random(); timestamp/url/title фиксируются через
- * BuildOptions (в тестах — обязательно).
+ * Детерминизм (решение для M1.2 Cache/Diff): id = rawTag_indexPath из DOM-пути,
+ * идентично data-vsl-id из извлечения и парсингу injectVslIdsIntoDom —
+ * клики/поиск элементов работают по этому id; без Date.now()/Math.random();
+ * timestamp/url/title фиксируются через BuildOptions (в тестах — обязательно).
  */
 
 import type { SegmentedElement } from '../segmentation/segmenter';
@@ -53,12 +54,6 @@ const INTERACTIVE_ATTRS: readonly string[] = [
   'tabindex',
   'contenteditable',
 ];
-
-/** Относительная координата [0..1], округление до 4 знаков (компактность JSON). */
-function relative(value: number, dimension: number): number {
-  if (dimension <= 0) return 0;
-  return Math.round((value / dimension) * 10000) / 10000;
-}
 
 /** Умные дефолты act по README_AI §4.4; disabled → взаимодействие недоступно. */
 function defaultActions(
@@ -163,69 +158,72 @@ function extractVisualStyles(css?: ElementCss): VslStyle | undefined {
 
 function toVslObject(
   el: SegmentedElement,
-  viewport: { width: number; height: number },
   includedChildren: VslObject[],
   textBlocks: Map<string, string>,
   counter: { value: number },
-): VslObject {
-  const t: VslType = el.t ?? 'container';
-  const object: VslObject = {
-    id: `${el.tag}_${el.indexPath.join('_')}`,
-    t,
-    p: [relative(el.rect.x, viewport.width), relative(el.rect.y, viewport.height)],
-    s: [Math.round(el.rect.width), Math.round(el.rect.height)],
-  };
-  const role = el.attributes['role'];
-  if (role !== undefined) object.r = role;
-  if (el.st) object.st = el.st;
-  if (el.txt) {
-    if (el.txt.length > LAZY_TEXT_THRESHOLD) {
-      object.txt_preview = el.txt.slice(0, LAZY_TEXT_PREVIEW_LENGTH) + '…';
-      const refId = `tb_${String(counter.value++).padStart(3, '0')}`;
-      object.txt_ref = refId;
-      textBlocks.set(refId, el.txt);
-    } else {
-      object.txt = el.txt;
-    }
-  }
-  const act = defaultActions(t, el.st, el.attributes);
-  if (act !== undefined) object.act = act;
-  if (includedChildren.length > 0) object.ch = includedChildren;
-  if (el.vf !== undefined) object.vf = el.vf;
-  if (el.vf_meta !== undefined) object.vf_meta = el.vf_meta;
-  const sty = extractVisualStyles(el.css);
-  if (sty !== undefined) object.sty = sty;
-  // file_input: извлекаем accept и multiple атрибуты
-  if (t === 'file_input') {
-    if (el.attributes['accept'] !== undefined) object.accept = el.attributes['accept'];
-    if (el.attributes['multiple'] !== undefined) object.multiple = true;
-  }
-  // dropdown_toggle: извлекаем aria-haspopup как hasPopup
-  if (t === 'dropdown_toggle' && el.attributes['aria-haspopup'] !== undefined) {
-    object.hasPopup = el.attributes['aria-haspopup'];
-  }
-  return object;
-}
+ ): VslObject {
+   const t: VslType = el.t ?? 'container';
+   // id = rawTag_indexPath — идентично data-vsl-id из извлечения (АС маппинга):
+   // execute_action/getVisual ищут [data-vsl-id="..."], формат обязан совпадать.
+   const id = `${el.tag}_${el.indexPath.join('_')}`;
+   const object: VslObject = {
+     id,
+     t,
+     // Абсолютные страница-релятивные пиксельные координаты (АС[2]):
+     // входной rect уже включает компенсацию скролла (x+scrollX, y+scrollY).
+     p: [Math.round(el.rect.x), Math.round(el.rect.y)],
+     s: [Math.round(el.rect.width), Math.round(el.rect.height)],
+   };
+   const role = el.attributes['role'];
+   if (role !== undefined) object.r = role;
+   if (el.st) object.st = el.st;
+   if (el.txt) {
+     if (el.txt.length > LAZY_TEXT_THRESHOLD) {
+       object.txt_preview = el.txt.slice(0, LAZY_TEXT_PREVIEW_LENGTH) + '…';
+       const refId = `tb_${String(counter.value++).padStart(3, '0')}`;
+       object.txt_ref = refId;
+       textBlocks.set(refId, el.txt);
+     } else {
+       object.txt = el.txt;
+     }
+   }
+   const act = defaultActions(t, el.st, el.attributes);
+   if (act !== undefined) object.act = act;
+   if (includedChildren.length > 0) object.ch = includedChildren;
+   if (el.vf !== undefined) object.vf = el.vf;
+   if (el.vf_meta !== undefined) object.vf_meta = el.vf_meta;
+   const sty = extractVisualStyles(el.css);
+   if (sty !== undefined) object.sty = sty;
+   // file_input: извлекаем accept и multiple атрибуты
+   if (t === 'file_input') {
+     if (el.attributes['accept'] !== undefined) object.accept = el.attributes['accept'];
+     if (el.attributes['multiple'] !== undefined) object.multiple = true;
+   }
+   // dropdown_toggle: извлекаем aria-haspopup как hasPopup
+   if (t === 'dropdown_toggle' && el.attributes['aria-haspopup'] !== undefined) {
+     object.hasPopup = el.attributes['aria-haspopup'];
+   }
+   return object;
+ }
 
 /** Нижняя граница обхода: сначала дети, затем решение о включении элемента. */
 function convert(
   el: SegmentedElement,
-  viewport: { width: number; height: number },
   textBlocks: Map<string, string>,
   counter: { value: number },
-): VslObject | null {
-  const includedChildren = el.ch
-    .map((child) => convert(child, viewport, textBlocks, counter))
-    .filter((obj): obj is VslObject => obj !== null);
+ ): VslObject | null {
+   const includedChildren = el.ch
+     .map((child) => convert(child, textBlocks, counter))
+     .filter((obj): obj is VslObject => obj !== null);
 
-  if (el.t !== null) return toVslObject(el, viewport, includedChildren, textBlocks, counter);
+   if (el.t !== null) return toVslObject(el, includedChildren, textBlocks, counter);
 
-  const score = baseSemanticScore(el) + (includedChildren.length > 0 ? 1 : 0);
-  if (score >= 3 || includedChildren.length > 0) {
-    return toVslObject(el, viewport, includedChildren, textBlocks, counter);
-  }
-  return null; // декоративный — пропускается вместе с поддеревом
-}
+   const score = baseSemanticScore(el) + (includedChildren.length > 0 ? 1 : 0);
+   if (score >= 3 || includedChildren.length > 0) {
+     return toVslObject(el, includedChildren, textBlocks, counter);
+   }
+   return null; // декоративный — пропускается вместе с поддеревом
+ }
 
 /**
  * Будет ли элемент включён в VSL (решение convert без построения объектов):
@@ -290,28 +288,29 @@ function collectVisualFragments(
 
 /**
  * Строит VSL JSON из семантического дерева (segmentTree) по DESIGN_SYSTEM §4.
- * Viewport фиксируется один раз на всю сборку — p-нормализация консистентна.
+ * Координаты p — абсолютные страница-релятивные пиксели (АС[2]);
+ * viewport используется только для метаданных canvas.
  */
 export function buildVslDocument(
   elements: readonly SegmentedElement[],
   options: BuildOptions = {},
-): VslDocument {
-  const viewport = {
-    width: options.viewport?.width ?? window.innerWidth,
-    height: options.viewport?.height ?? window.innerHeight,
-  };
-  const textBlocks = new Map<string, string>();
-  const counter = { value: 0 };
-  const objects = elements
-    .map((el) => convert(el, viewport, textBlocks, counter))
-    .filter((obj): obj is VslObject => obj !== null);
-  const vslDocument: VslDocument = {
-    vsl_version: VSL_VERSION,
-    canvas: buildCanvas(options, viewport),
-    objects,
-  };
-  const visualFragments = collectVisualFragments(objects);
-  if (visualFragments !== undefined) vslDocument.visual_fragments = visualFragments;
-  if (textBlocks.size > 0) vslDocument.text_blocks = Object.fromEntries(textBlocks);
-  return vslDocument;
-}
+ ): VslDocument {
+   const viewport = {
+     width: options.viewport?.width ?? window.innerWidth,
+     height: options.viewport?.height ?? window.innerHeight,
+   };
+   const textBlocks = new Map<string, string>();
+   const counter = { value: 0 };
+   const objects = elements
+     .map((el) => convert(el, textBlocks, counter))
+     .filter((obj): obj is VslObject => obj !== null);
+   const vslDocument: VslDocument = {
+     vsl_version: VSL_VERSION,
+     canvas: buildCanvas(options, viewport),
+     objects,
+   };
+   const visualFragments = collectVisualFragments(objects);
+   if (visualFragments !== undefined) vslDocument.visual_fragments = visualFragments;
+   if (textBlocks.size > 0) vslDocument.text_blocks = Object.fromEntries(textBlocks);
+   return vslDocument;
+ }

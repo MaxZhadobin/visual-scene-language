@@ -19,6 +19,7 @@
  * детерминированных ID VSL (решение note_1789916091535: без Date.now()/Math.random(),
  * база для diffing в M1.2).
  */
+import { getGlobalFilter } from '../security/promptInjectionFilter';
 
 export interface Rect {
   x: number;
@@ -121,6 +122,23 @@ export function ownText(el: Element): string {
   return raw.replace(/\s+/g, ' ').trim();
 }
 
+/**
+ * Извлекает текст элемента и применяет Prompt Injection Filter (T1.8.5, M1.8).
+ * Внутренняя функция — обёртка над ownText() с фильтрацией.
+ */
+function filteredOwnText(el: Element, url?: string): string {
+  const raw = ownText(el);
+  if (!raw) return raw;
+
+  const filter = getGlobalFilter();
+  if (!filter.isEnabled()) {
+    return raw;
+  }
+
+  const result = filter.scan(raw, url);
+  return result.cleanText;
+}
+
 function extractAttributes(el: Element): Record<string, string> {
   const attributes: Record<string, string> = {};
   for (const attr of Array.from(el.attributes)) {
@@ -176,7 +194,7 @@ function hasZeroBox(rect: Rect): boolean {
   return rect.width <= 0 || rect.height <= 0;
 }
 
-function collectVisibleChildren(parent: Element, parentPath: readonly number[]): ExtractedElement[] {
+function collectVisibleChildren(parent: Element, parentPath: readonly number[], url?: string): ExtractedElement[] {
   const result: ExtractedElement[] = [];
   Array.from(parent.children).forEach((child, index) => {
     const path = [...parentPath, index];
@@ -192,7 +210,7 @@ function collectVisibleChildren(parent: Element, parentPath: readonly number[]):
     // Сам элемент без видимого бокса, но дети могут быть видимы —
     // не включаем его, поддерево обходим.
     if (isVisibilityHidden(child) || hasZeroBox(rect)) {
-      result.push(...collectVisibleChildren(child, path));
+      result.push(...collectVisibleChildren(child, path, url));
       return;
     }
 
@@ -200,10 +218,10 @@ function collectVisibleChildren(parent: Element, parentPath: readonly number[]):
       tag,
       indexPath: path,
       rect,
-      text: ownText(child) || null,
+      text: filteredOwnText(child, url) || null,
       attributes: extractAttributes(child),
       css: captureCss(child),
-      children: collectVisibleChildren(child, path),
+      children: collectVisibleChildren(child, path, url),
     });
   });
   return result;
@@ -220,7 +238,10 @@ function defaultRoot(): Element {
 /**
  * Извлекает видимое поддерево DOM, начиная с root (по умолчанию document.body).
  * Сам root не включается — возвращается лес его видимых потомков.
+ *
+ * @param root — корневой элемент для обхода (по умолчанию document.body)
+ * @param url — URL страницы (для Prompt Injection Filter whitelist, T1.8.5)
  */
-export function extractDomTree(root: Element = defaultRoot()): ExtractedElement[] {
-  return collectVisibleChildren(root, []);
+export function extractDomTree(root: Element = defaultRoot(), url?: string): ExtractedElement[] {
+  return collectVisibleChildren(root, [], url);
 }

@@ -7,4 +7,6 @@ export default defineConfig({
   sourcemap: true,
   clean: true,
   target: 'es2022',
+  platform: 'node',
+  shims: true, // Inject __dirname/import.meta.url shims for cross-format compatibility
 });

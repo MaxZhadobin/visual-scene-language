@@ -411,6 +411,42 @@ DECISIONS.md — это журнал всех архитектурных реш�
 **Связи:** DEC-019, DEC-024, DEC-028
 
 ---
+
+### DEC-029: Style Stripping — удаление визуальных стилей из medium/low detail levels
+
+**Дата:** 2026-09-27
+**Статус:** accepted
+**Контекст:** `extractVisualStyles` в vslBuilder.ts добавляет bg/fg/border/radius/shadow/font для КАЖДОГО элемента с non-zero computed styles. Сотни объектов × 3-6 style полей = тысячи токенов. LLM-агент не видит страницу визуально и редко нуждается в computed styles.
+**Решение:** При `detail_level` low/medium поле `sty` (визуальные стили) автоматически удаляется из объектов через `filterObjectsByDetailLevel` в `detailLevelFilter.ts`. При `detail_level: high` стили сохраняются. Для визуального понимания используется `vsl_get_visual`.
+**Обоснование:** (1) LLM-агент не видит страницу визуально — computed styles бесполезны. (2) Для визуального понимания есть `vsl_get_visual` (скриншот элемента). (3) Экономия: ~15-25% токенов на medium detail level. (4) Соответствует принципу pay only for what you need.
+**Последствия:** `packages/mcp-server/src/utils/detailLevelFilter.ts` реализует style stripping. README_AI.md §4.2 описывает механизм. DEC-015 (Visual Fragments Pipeline) остаётся для визуальных элементов без A11y.
+**Связи:** DEC-015, DEC-024, DEC-006
+
+---
+
+### DEC-030: Per-type Counter ID Generation — короткие стабильные ID
+
+**Дата:** 2026-09-27
+**Статус:** accepted
+**Контекст:** Старая ID генерация использовала `tag_indexPath` → `button_0_1_2_3`, `div_0_1_2_3_4_5_6_7_8_9` (длинные строки). Это приводило к: (1) нестабильности при DOM-мутациях (добавление элемента сдвигает indexPath всех последующих), (2) избыточному расходу токенов на длинные ID, (3) несогласованности между browser и HTTP путями.
+**Решение:** Унифицированная ID генерация в `idGenerator.ts`: (1) Приоритет 1 — использовать существующий DOM `id` если есть (стабильный, читаемый). (2) Приоритет 2 — fallback с сокращёнными типами: `btn_1`, `inp_2`, `cont_3` вместо `button_0_1_2_3`. Per-type counters: добавление нового button инкрементирует только btn counter, не затрагивая nav/cont/link ID.
+**Обоснование:** (1) Per-type counters обеспечивают стабильность ID при DOM-мутациях — добавление элемента не сдвигает ID остальных. (2) Сокращённые типы (btn/inp/link/cont) экономят ~50-70% размера ID. (3) Унификация browser и HTTP путей устраняет несогласованность. (4) DOM id приоритет сохраняет читаемость для элементов с явными ID.
+**Последствия:** `src/utils/idGenerator.ts` — эталонная реализация. `src/builder/vslBuilder.ts` и `packages/mcp-server/src/tools/httpExtractor.ts` используют `createIdGenerator`. Все тесты обновлены на новый формат ID. README_AI.md §4.6 описывает формат.
+**Связи:** DEC-006, DEC-022, DEC-024
+
+---
+
+### DEC-032: Viewport Culling — исключение offscreen элементов
+
+**Дата:** 2026-09-27
+**Статус:** accepted
+**Контекст:** Элементы за пределами видимой области (y > viewport.height) включались в snapshot. На длинных страницах (статьи, списки, дашборды) это удваивало/утраивало количество объектов. LLM-агент работает с видимой областью и скроллит явно.
+**Решение:** Viewport culling в `getSnapshot.ts` `extractDomTreeInBrowser`: (1) Извлекаются ВСЕ элементы из DOM (включая offscreen), (2) ID присваиваются ВСЕМ элементам (ДО culling — для стабильности), (3) Фильтруются offscreen элементы (частично видимые включаются: `y <viewport.height && y + height > 0`), (4) Параметр `include_offscreen` (default: false) для случаев, когда нужен полный контент, (5) Metadata `culled_offscreen_count: N` для отладки.
+**Обоснование:** (1) Экономия 50-80% токенов на длинных страницах. (2) ID стабильны — culling происходит ПОСЛЕ генерации ID. (3) Агент скроллит явно — это правильный workflow. (4) `include_offscreen` позволяет получить полный контент при необходимости.
+**Последствия:** `packages/mcp-server/src/tools/getSnapshot.ts` реализует viewport culling. README_AI.md §7.6 описывает параметр `include_offscreen`. DEC-024 (vsl_read_page) не затронут — HTTP-путь не имеет координат.
+**Связи:** DEC-024, DEC-006, DEC-010
+
+---
 ## 4. Decision Index
 
 | ID | Название | Статус | Связи |
@@ -446,7 +482,10 @@ DECISIONS.md — это журнал всех архитектурных реш�
 ---
 | DEC-027 | Prompt Injection Filter — защита от инъекций через веб-контент (M1.8) | accepted | DEC-001, DEC-004, DEC-010, DEC-024, DEC-026 |
 | DEC-028 | Lazy Navigation в vsl_execute_action — автоматическая навигация на URL из snapshot | accepted | DEC-024, DEC-019, DEC-010 |
+| DEC-029 | Style Stripping — удаление визуальных стилей из medium/low detail levels | accepted | DEC-015, DEC-024, DEC-006 |
+| DEC-030 | Per-type Counter ID Generation — короткие стабильные ID | accepted | DEC-006, DEC-022, DEC-024 |
 | DEC-031 | Graceful Error Handling — явная индикация сбоев извлечения состояния | accepted | DEC-019, DEC-024, DEC-028 |
+| DEC-032 | Viewport Culling — исключение offscreen элементов | accepted | DEC-024, DEC-006, DEC-010 |
 ## Cross-References
 
 - [PRODUCT_CONCEPT.md](./PRODUCT_CONCEPT.md) — продуктовая концепция VSL, value proposition, non-goals

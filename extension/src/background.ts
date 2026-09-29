@@ -26,7 +26,7 @@
 import type { ActionResult } from '../../src/executor/types';
 import { AnthropicAdapter } from '../../src/llm/anthropic';
 import { OpenAIAdapter } from '../../src/llm/openai';
-import type { LlmAction, LlmAdapter } from '../../src/llm/types';
+import type { LlmAction, LlmAdapter, RawLlmCaller } from '../../src/llm/types';
 import { LlmVisionClassifier } from '../../src/vision/llmVisionClassifier';
 import {
   AGENT_STATE_KEY,
@@ -152,7 +152,7 @@ async function runAgentLoop(start: StartRequest): Promise<void> {
     const adapter = createAdapter(start.provider, start.apiKey, start.baseUrl, start.model);
     // Vision-ветка (T1.5.5): классификатор живёт module-level на время цикла —
     // обслуживает vsl/classify от content (ключ не ходит в каждом сообщении).
-    visionClassifier = new LlmVisionClassifier(adapter);
+      visionClassifier = new LlmVisionClassifier(adapter as unknown as RawLlmCaller);
     const tabId = await getActiveTabId();
 
     for (let step = 1; step <= maxSteps; step += 1) {

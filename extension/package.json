@@ -1,0 +1,14 @@
+{
+  "name": "vsl-extension",
+  "version": "0.1.0",
+  "private": true,
+  "description": "VSL Chrome Extension — page snapshot, LLM decision, DOM execution",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src/",
+    "build": "tsup --config tsup.config.ts"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.287"
+  }
+}

@@ -1,7 +1,7 @@
 /**
  * Юнит-тесты VSL Builder (T1.1.5).
  * Контракты: ARCHITECTURE.md §2.3 (структура), DESIGN_SYSTEM.md §4 (формат),
- * README_AI §4.2/§4.4 (короткие ключи, относительные p, умные дефолты act),
+ * README_AI §4.2/§4.4 (короткие ключи, абсолютные p (АС[2]), умные дефолты act),
  * Semantic Density (адаптация к L1/L2).
  */
 import { extractDomTree } from '../capture/domExtractor';
@@ -64,22 +64,22 @@ describe('buildVslDocument: объекты (id/t/r/p/s/st/txt/act/ch)', () => {
     document.body.innerHTML = '';
   });
 
-  it('детерминированный id из DOM-пути; p относительные [0..1]; s в px (округл.); txt/act-дефолты', () => {
+  it('детерминированный id из DOM-пути; p абсолютные px (АС[2]); s в px (округл.); txt/act-дефолты', () => {
     const doc = buildFromHtml('<button data-rect="100,50,120.6,40" id="submit">OK</button>');
     expect(doc.objects).toHaveLength(1);
     const btn = doc.objects[0]!;
-    expect(btn.id).toBe('button_0');
+    expect(btn.id).toBe('button_0'); // id = tag_indexPath идентично data-vsl-id; DOM id игнорируется
     expect(btn.t).toBe('button');
-    expect(btn.p).toEqual([0.1, 0.1]);
+    expect(btn.p).toEqual([100, 50]); // абсолютные страница-релятивные пиксели
     expect(btn.s).toEqual([121, 40]);
     expect(btn.txt).toBe('OK');
     expect(btn.act).toEqual(['click']);
     expect(btn.ch).toBeUndefined();
   });
 
-  it('p округляется до 4 знаков (333/1000=0.333; 111/500=0.222)', () => {
-    const doc = buildFromHtml('<button data-rect="333,111,100,40">OK</button>');
-    expect(doc.objects[0]!.p).toEqual([0.333, 0.222]);
+  it('p — целые пиксели: дробный округляется (333.4→333; 111.6→112)', () => {
+    const doc = buildFromHtml('<button data-rect="333.4,111.6,100,40">OK</button>');
+    expect(doc.objects[0]!.p).toEqual([333, 112]); // Math.round абсолютных координат
   });
 
   it('вложенность: id отражает DOM-путь (button_0_0); нетипизированный родитель → container-обёртка', () => {

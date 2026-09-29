@@ -23,11 +23,13 @@ describe('vsl_read_page', () => {
   let mockBrowser: jest.Mocked<BrowserManager>;
   let mockSession: jest.Mocked<ServerSession>;
   let mockConfig: McpServerConfig;
-  let mockPage: { screenshot: jest.Mock };
+  let mockPage: { screenshot: jest.Mock; waitForTimeout: jest.Mock };
 
   beforeEach(() => {
     mockPage = {
       screenshot: jest.fn(),
+      // Единый пайплайн отдачи: инжект data-vsl-id использует waitForTimeout
+      waitForTimeout: jest.fn().mockResolvedValue(undefined),
     };
 
     mockBrowser = {
@@ -44,9 +46,20 @@ describe('vsl_read_page', () => {
     mockSession = {
       hasSnapshot: jest.fn(),
       setSnapshot: jest.fn(),
-      getSnapshot: jest.fn(),
+      getSnapshot: jest.fn().mockReturnValue({
+        canvas: { url: 'https://example.com', viewport: { width: 1024, height: 768 } },
+        objects: [],
+      }),
       getDiff: jest.fn(),
       clear: jest.fn(),
+      // Единый пайплайн отдачи (АС[3]): рендер-путь строит документ через
+      // snapshotFromElements, отдача фильтруется по скролл-контексту
+      snapshotFromElements: jest.fn().mockReturnValue({
+        canvas: { url: 'https://example.com', viewport: { width: 1024, height: 768 } },
+        objects: [],
+      }),
+      getScrollContext: jest.fn().mockReturnValue(null),
+      getPreviousSnapshot: jest.fn().mockReturnValue(null),
     } as unknown as jest.Mocked<ServerSession>;
 
     mockConfig = {
@@ -94,9 +107,14 @@ describe('vsl_read_page', () => {
 
     mockBrowser.isAvailable.mockResolvedValue(true);
     mockBrowser.getContent.mockResolvedValue(html);
-    mockBrowser.evaluate.mockResolvedValue({
-      rect: { width: 1280, height: 800 },
-    } as never);
+    // Единый пайплайн отдачи (АС[3]): рендер-путь извлекает полный документ
+    // через extractDomTree (обёртка extraction_result со скроллом)
+    mockBrowser.evaluate.mockResolvedValue([{
+      __type: 'extraction_result',
+      elements: [],
+      viewport: { width: 1024, height: 768 },
+      scroll: { x: 0, y: 0, width: 1024, height: 768 },
+    }] as never);
 
     const result = await handleReadPage(
       { url: 'https://spa.example.com' },
@@ -111,7 +129,8 @@ describe('vsl_read_page', () => {
     expect(result.data?.metadata.isSpa).toBe(true);
     expect(result.data?.vslDocument).toBeDefined();
     expect(mockBrowser.navigate).toHaveBeenCalledWith('https://spa.example.com');
-    expect(mockSession.setSnapshot).toHaveBeenCalled();
+    // Рендер-путь строит документ через SDK-пайплайн (АС[3])
+    expect(mockSession.snapshotFromElements).toHaveBeenCalled();
   });
 
   it('авто-детект SPA и переключение на render', async () => {
@@ -125,9 +144,13 @@ describe('vsl_read_page', () => {
 
     mockBrowser.isAvailable.mockResolvedValue(true);
     mockBrowser.getContent.mockResolvedValue(html);
-    mockBrowser.evaluate.mockResolvedValue({
-      rect: { width: 1280, height: 800 },
-    } as never);
+    // Единый пайплайн отдачи (АС[3]): обёртка extraction_result
+    mockBrowser.evaluate.mockResolvedValue([{
+      __type: 'extraction_result',
+      elements: [],
+      viewport: { width: 1024, height: 768 },
+      scroll: { x: 0, y: 0, width: 1024, height: 768 },
+    }] as never);
 
     const result = await handleReadPage(
       { url: 'https://spa.example.com' },
@@ -211,9 +234,13 @@ describe('vsl_read_page', () => {
     const html = '<html><body>Rendered content</body></html>';
     mockBrowser.isAvailable.mockResolvedValue(true);
     mockBrowser.getContent.mockResolvedValue(html);
-    mockBrowser.evaluate.mockResolvedValue({
-      rect: { width: 1280, height: 800 },
-    } as never);
+    // Единый пайплайн отдачи (АС[3]): обёртка extraction_result
+    mockBrowser.evaluate.mockResolvedValue([{
+      __type: 'extraction_result',
+      elements: [],
+      viewport: { width: 1024, height: 768 },
+      scroll: { x: 0, y: 0, width: 1024, height: 768 },
+    }] as never);
 
     const result = await handleReadPage(
       { url: 'https://example.com' },
@@ -232,9 +259,13 @@ describe('vsl_read_page', () => {
 
     mockBrowser.isAvailable.mockResolvedValue(true);
     mockBrowser.getContent.mockResolvedValue(html);
-    mockBrowser.evaluate.mockResolvedValue({
-      rect: { width: 1280, height: 800 },
-    } as never);
+    // Единый пайплайн отдачи (АС[3]): обёртка extraction_result
+    mockBrowser.evaluate.mockResolvedValue([{
+      __type: 'extraction_result',
+      elements: [],
+      viewport: { width: 1024, height: 768 },
+      scroll: { x: 0, y: 0, width: 1024, height: 768 },
+    }] as never);
     mockSession.hasSnapshot.mockReturnValue(true);
 
     const result = await handleReadPage(
@@ -246,7 +277,8 @@ describe('vsl_read_page', () => {
 
     expect(result.status).toBe('success');
     expect(result.data?.hasDiff).toBe(true);
-    expect(mockSession.setSnapshot).toHaveBeenCalled();
+    // Рендер-путь строит документ через SDK-пайплайн (АС[3])
+    expect(mockSession.snapshotFromElements).toHaveBeenCalled();
   });
 
   it('использует fallback DOM при исключении из browser.evaluate()', async () => {

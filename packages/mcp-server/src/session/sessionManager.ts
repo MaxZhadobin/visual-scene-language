@@ -119,11 +119,19 @@ export class SessionManager {
   async closeAll(): Promise<void> {
     this.stopCleanup();
 
-    const closePromises = Array.from(this.sessions.values()).map((context) =>
-      context.browser.close(),
-    );
+    // Используем Promise.allSettled() вместо Promise.all() для предотвращения
+    // падения всего closeAll() если хотя бы один browser.close() отклоняется.
+    // Это предотвращает разрыв MCP соединения (MCP error -32000: Connection closed)
+    const closePromises = Array.from(this.sessions.values()).map(async (context) => {
+      try {
+        await context.browser.close();
+      } catch (error) {
+        console.error('[SessionManager] Error closing browser session:', error);
+        // Продолжаем закрытие остальных сессий
+      }
+    });
 
-    await Promise.all(closePromises);
+    await Promise.allSettled(closePromises);
     this.sessions.clear();
   }
 

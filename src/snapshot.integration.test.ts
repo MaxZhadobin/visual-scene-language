@@ -52,8 +52,9 @@ function validateVslDocument(doc: VslDocument): void {
       expect(TYPES.has(o.t)).toBe(true);
       expect(o.p).toHaveLength(2);
       for (const v of o.p) {
-        expect(v).toBeGreaterThanOrEqual(0); // p относительные 0..1
-        expect(v).toBeLessThanOrEqual(1);
+        // p — абсолютные страница-релятивные пиксели (АС[2]): целые, >= 0
+        expect(Number.isInteger(v)).toBe(true);
+        expect(v).toBeGreaterThanOrEqual(0);
       }
       expect(o.s).toHaveLength(2);
       for (const v of o.s) expect(v).toBeGreaterThanOrEqual(0);
@@ -181,7 +182,7 @@ describe('Snapshot generation: лендинг (T1.1.6)', () => {
     expect(byId(doc.objects, 'button_1_1').txt).toBe('Начать бесплатно'); // aria-label
     expect(byId(doc.objects, 'button_1_1').act).toEqual(['click']);
     // span с единственным txt: score 1 < 3 → декоративный, исключён
-    expect(flatObjects(doc.objects).some((o) => o.id === 'span_1_0')).toBe(false);
+    expect(flatObjects(doc.objects).some((o) => o.txt === 'Продукт нового поколения')).toBe(false);
   });
 });
 

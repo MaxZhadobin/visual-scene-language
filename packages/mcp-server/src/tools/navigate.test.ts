@@ -19,13 +19,19 @@ describe('vsl_navigate', () => {
   let mockSession: jest.Mocked<ServerSession>;
 
   beforeEach(() => {
+    // Мок страницы с waitForTimeout — нужен injectVslIdsIntoDom, чтобы
+    // успешная ветка единого пайплайна отдачи реально исполнялась в тестах
+    const mockPage = {
+      waitForTimeout: jest.fn().mockResolvedValue(undefined),
+    };
+
     mockBrowser = {
       isAvailable: jest.fn(),
       navigate: jest.fn(),
       evaluate: jest.fn(),
       getContent: jest.fn(),
       screenshot: jest.fn(),
-      getPage: jest.fn(),
+      getPage: jest.fn().mockReturnValue(mockPage),
       launch: jest.fn(),
       close: jest.fn(),
     } as unknown as jest.Mocked<BrowserManager>;
@@ -37,6 +43,8 @@ describe('vsl_navigate', () => {
       getDiff: jest.fn(),
       clear: jest.fn(),
       snapshotFromElements: jest.fn(),
+      // Единый пайплайн отдачи (АС[3]): скролл-контекст последнего снапшота
+      getScrollContext: jest.fn().mockReturnValue(null),
     } as unknown as jest.Mocked<ServerSession>;
   });
 
@@ -45,9 +53,13 @@ describe('vsl_navigate', () => {
     mockBrowser.navigate.mockResolvedValue(undefined);
     mockBrowser.evaluate
       .mockResolvedValueOnce('Test Page Title' as never)  // title
-      .mockResolvedValueOnce([] as never)  // extractDomTreeInBrowser
-      .mockResolvedValueOnce({ width: 1024, height: 768 } as never);  // viewport
-    mockSession.getSnapshot.mockReturnValue({ objects: [] } as never);
+      .mockResolvedValueOnce([{ __type: 'extraction_result', elements: [], viewport: { width: 1024, height: 768 }, scroll: { x: 0, y: 0, width: 1024, height: 768 } }] as never)  // extractDomTree (обёртка)
+      .mockResolvedValueOnce(undefined as never);  // injectVslIdsIntoDom
+    // Документ с canvas — единый пайплайн отдачи берёт вьюпорт из документа
+    mockSession.getSnapshot.mockReturnValue({
+      objects: [],
+      canvas: { viewport: { width: 1024, height: 768 }, url: 'https://example.com' },
+    } as never);
 
     const result = await handleNavigate({ url: 'https://example.com' }, mockBrowser, mockSession);
 
@@ -107,8 +119,7 @@ describe('vsl_navigate', () => {
     mockBrowser.navigate.mockResolvedValue(undefined);
     mockBrowser.evaluate
       .mockResolvedValueOnce('Test Page Title' as never)  // title
-      .mockResolvedValueOnce([] as never)  // extractDomTreeInBrowser
-      .mockResolvedValueOnce({ width: 1024, height: 768 } as never);  // viewport
+      .mockResolvedValueOnce([{ __type: 'extraction_result', elements: [], viewport: { width: 1024, height: 768 }, scroll: { x: 0, y: 0, width: 1024, height: 768 } }] as never);  // extractDomTree (обёртка)
     mockSession.snapshotFromElements.mockImplementation(() => {
       throw new Error('snapshotFromElements failed');
     });

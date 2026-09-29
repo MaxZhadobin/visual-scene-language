@@ -53,8 +53,10 @@ interface PlaywrightPage {
   screenshot(options?: { type?: string; fullPage?: boolean; clip?: { x: number; y: number; width: number; height: number } }): Promise<Buffer>;
   close(): Promise<void>;
   waitForSelector(selector: string, options?: { timeout?: number }): Promise<unknown>;
-  click(selector: string): Promise<void>;
-  fill(selector: string, value: string): Promise<void>;
+  waitForTimeout(ms: number): Promise<void>;
+  click(selector: string, options?: { timeout?: number }): Promise<void>;
+  fill(selector: string, value: string, options?: { timeout?: number }): Promise<void>;
+  keyboard: { press(key: string, options?: { delay?: number }): Promise<void> };
   selectOption(selector: string, value: string): Promise<string[]>;
   setInputFiles(selector: string, files: string | string[]): Promise<void>;
   waitForEvent(event: string, optionsOrPredicate?: { timeout?: number } | ((arg: unknown) => boolean)): Promise<PlaywrightFileChooser>;
@@ -380,13 +382,22 @@ export class BrowserManager {
     // Очищаем активные загрузки
     this.activeDownloads.clear();
 
-    if (this.context) {
-      await this.context.close();
-      this.context = null;
-    }
+    try {
+      if (this.context) {
+        await this.context.close();
+        this.context = null;
+      }
 
-    if (this.browser) {
-      await this.browser.close();
+      if (this.browser) {
+        await this.browser.close();
+        this.browser = null;
+      }
+    } catch (error) {
+      // Логируем ошибку, но не пробрасываем — предотвращает падение процесса
+      // и разрыв MCP соединения (MCP error -32000: Connection closed)
+      console.error('[BrowserManager] Error during close():', error);
+      // Принудительно обнуляем ссылки даже при ошибке
+      this.context = null;
       this.browser = null;
     }
 

@@ -18,22 +18,23 @@ import type { McpServerConfig } from '../config/loader.js';
 import type { VslDocument, VslObject, SnapshotInput, SnapshotResult } from '@thinkingos/vsl-sdk';
 import { isVslDiff } from '@thinkingos/vsl-sdk';
 import { injectVslIdsIntoDom } from '../utils/injectVslIds.js';
-
-/** Уровни детализации snapshot (DEC-027). */
-export type DetailLevel = 'low' | 'medium' | 'high';
+import { filterDiffByDetailLevel, filterObjectsByDetailLevel, type DetailLevel } from '../utils/detailLevelFilter.js';
+import { computeScrollable, computeVisibleWindow, filterDiffByViewport, filterObjectsByViewport, type ScrollableInfo, type ScrollContext } from '../utils/viewportFilter.js';
 
 /** TTL кэша snapshot по умолчанию (5 секунд). */
 const DEFAULT_SNAPSHOT_TTL_MS = 5000;
 
 /** Запись кэша snapshot. */
 interface SnapshotCacheEntry {
-  result: GetSnapshotResult;
+  /** ПОЛНЫЙ документ (все объекты, без фильтрации) — фильтруется при отдаче (АС[5]). */
+  fullDocument: VslDocument;
+  /** Скролл-контекст на момент создания снапшота (для вьюпорт-фильтра из кэша). */
+  scrollContext: ScrollContext | null;
   timestamp: number;
   url: string;
-  detailLevel: DetailLevel;
 }
 
-/** Кэш snapshot (ключ: URL + detail_level). */
+/** Кэш snapshot (ключ: URL; detail_level НЕ входит в ключ — фильтрация на отдаче, АС[5]). */
 const snapshotCache = new Map<string, SnapshotCacheEntry>();
 
 
@@ -41,7 +42,7 @@ const snapshotCache = new Map<string, SnapshotCacheEntry>();
 export interface GetSnapshotArgs {
   url?: string;
   /**
-   * Уровень детализации snapshot (default: 'high').
+   * Уровень детализации snapshot (default: 'medium').
    * - 'low': только интерактивные элементы (кнопки, ссылки, инпуты)
    * - 'medium': интерактивные + контейнеры
    * - 'high': все объекты (полный DOM)
@@ -53,6 +54,12 @@ export interface GetSnapshotArgs {
    * Установите 0 для отключения кэширования.
    */
   ttl?: number;
+  /**
+   * Полный режим: возвращает ПОЛНЫЙ документ, минуя вьюпорт-фильтр, детализацию
+   * и дифф-фёрст логику (заменяет удалённый тул vsl_get_full_json).
+   * Используйте при потере контекста, когда нужна полная картина страницы.
+   */
+  full?: boolean;
 }
 
 /** Результат vsl_get_snapshot. */
@@ -70,86 +77,18 @@ export interface SnapshotMetadata {
   json_size_bytes: number;
   /** Приблизительное количество токенов (size / 4). */
   estimated_tokens: number;
-  /** Количество объектов в snapshot. */
+  /** Количество объектов в snapshot (shown). */
   object_count: number;
+  /** Общее количество объектов в полном документе (total). Формат shown/total. */
+  total_objects_count?: number;
   /** Timestamp генерации snapshot (ISO 8601). */
   timestamp: string;
   /** Время выполнения в миллисекундах. */
   execution_time_ms: number;
+  /** Метаданные скролла: есть ли контент сверху/снизу видимого окна (АС[3]). */
+  scrollable?: ScrollableInfo;
 }
 
-/**
- * Фильтрует объекты VSL по уровню детализации (DEC-027).
- * - 'low': только интерактивные элементы (кнопки, ссылки, инпуты)
- * - 'medium': интерактивные + контейнеры
- * - 'high': все объекты (без фильтрации)
- */
-function filterObjectsByDetailLevel(
-  objects: VslObject[],
-  level: DetailLevel,
-  ): VslObject[] {
-  if (level === 'high') return objects;
-
-  const INTERACTIVE_TYPES = new Set([
-    'button', 'link', 'input', 'select', 'checkbox', 'radio',
-    'textarea', 'file', 'submit', 'reset',
-  ]);
-
-  const CONTAINER_TYPES = new Set([
-    'div', 'section', 'article', 'nav', 'header', 'footer',
-    'main', 'aside', 'form', 'fieldset',
-  ]);
-
-  function filterRecursive(obj: VslObject): VslObject | null {
-    const type = obj.t || '';
-
-    if (level === 'low') {
-      // Только интерактивные элементы
-      if (!INTERACTIVE_TYPES.has(type)) {
-        // Проверяем детей — если есть интерактивные дети, возвращаем контейнер
-        if (obj.ch && obj.ch.length > 0) {
-          const filteredChildren = obj.ch
-            .map(filterRecursive)
-            .filter((child): child is VslObject => child !== null);
-          if (filteredChildren.length > 0) {
-            return { ...obj, ch: filteredChildren };
-          }
-        }
-        return null;
-      }
-      return obj;
-    }
-
-    if (level === 'medium') {
-      // Интерактивные + контейнеры
-      if (INTERACTIVE_TYPES.has(type) || CONTAINER_TYPES.has(type)) {
-        if (obj.ch && obj.ch.length > 0) {
-          const filteredChildren = obj.ch
-            .map(filterRecursive)
-            .filter((child): child is VslObject => child !== null);
-          return { ...obj, ch: filteredChildren };
-        }
-        return obj;
-      }
-      // Проверяем детей
-      if (obj.ch && obj.ch.length > 0) {
-        const filteredChildren = obj.ch
-          .map(filterRecursive)
-          .filter((child): child is VslObject => child !== null);
-        if (filteredChildren.length > 0) {
-          return { ...obj, ch: filteredChildren };
-        }
-      }
-      return null;
-    }
-
-    return obj;
-  }
-
-  return objects
-    .map(filterRecursive)
-    .filter((obj): obj is VslObject => obj !== null);
-}
 
 /**
  * Рекурсивно подсчитывает количество объектов в дереве VSL.
@@ -171,6 +110,8 @@ function countObjects(objects: VslObject[]): number {
  * Экспортируется для использования в других tools (executeAction с return_state).
  */
 export function extractDomTreeInBrowser(): unknown[] {
+  const viewportWidth = window.innerWidth;
+  const viewportHeight = window.innerHeight;
   // Интерфейсы (копия из SDK для типизации в browser context)
   interface Rect { x: number; y: number; width: number; height: number; }
   interface ElementCss {
@@ -239,7 +180,15 @@ export function extractDomTreeInBrowser(): unknown[] {
   }
 
   function toRect(rect: DOMRect): Rect {
-    return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+    // Абсолютные координаты страницы: компенсируем текущий скролл.
+    // Кэш хранит страница-релятивные координаты, видимый прямоугольник
+    // вычисляется на отдаче как [scroll, scroll+viewport] (единый пайплайн).
+    return {
+      x: rect.x + window.scrollX,
+      y: rect.y + window.scrollY,
+      width: rect.width,
+      height: rect.height,
+    };
   }
 
   function hasZeroBox(rect: Rect): boolean {
@@ -267,7 +216,7 @@ export function extractDomTreeInBrowser(): unknown[] {
       const css = captureCss(child);
 
       // Skip aria-hidden elements (matches segmentTree behavior)
-      if (attributes['aria-hidden'] === 'true') {
+      if (attributes?.['aria-hidden'] === 'true') {
         return;
       }
 
@@ -275,6 +224,9 @@ export function extractDomTreeInBrowser(): unknown[] {
       if (css.opacity === '0' && css.pointerEvents === 'none') {
         return;
       }
+
+      // Полный snapshot: offscreen элементы НЕ отсекаются при извлечении.
+      // Фильтрация по viewport выполняется на этапе отдачи в LLM (единый пайплайн).
 
       const children = collectVisibleChildren(child, path);
 
@@ -297,7 +249,51 @@ export function extractDomTreeInBrowser(): unknown[] {
 
   const body = document.body;
   if (!body) return [];
-  return collectVisibleChildren(body, []);
+  const elements = collectVisibleChildren(body, []);
+
+  // Возвращаем элементы (уже в абсолютных координатах) + метаданные страницы
+  return [{
+    __type: 'extraction_result',
+    elements,
+    viewport: { width: viewportWidth, height: viewportHeight },
+    scroll: {
+      x: window.scrollX,
+      y: window.scrollY,
+      width: document.documentElement ? document.documentElement.scrollWidth : 0,
+      height: document.documentElement ? document.documentElement.scrollHeight : 0,
+    },
+  }];
+}
+
+/** Развёрнутый результат извлечения DOM в браузере. */
+export interface DomExtractionResult {
+  elements: unknown[];
+  viewport: { width: number; height: number };
+  scroll: { x: number; y: number; width: number; height: number };
+}
+
+/**
+ * Извлекает DOM-дерево в браузере и РАЗВОРАЧИВАЕТ обёртку результата.
+ *
+ * Важные детали:
+ *  - extractDomTreeInBrowser передаётся в evaluate НАПРЯМУЮ —
+ *    стрелка-wrapper не сериализуется в браузерный контекст
+ *    (внешняя функция там не определена).
+ *  - Извлечение возвращает обёртку [{ __type, elements, viewport, scroll }].
+ *    Потребители ОБЯЗАНЫ передавать в snapshotFromElements именно `elements`,
+ *    иначе SDK segmentTree получит объект-обёртку без поля attributes и упадёт
+ *    с "Cannot read properties of undefined (reading 'aria-hidden')".
+ */
+export async function extractDomTree(browser: BrowserManager): Promise<DomExtractionResult> {
+  const extractionResult = await browser.evaluate(
+    extractDomTreeInBrowser,
+  ) as Array<{ __type: string } & DomExtractionResult>;
+
+  const extraction = Array.isArray(extractionResult) ? extractionResult[0] : undefined;
+  if (!extraction || !Array.isArray(extraction.elements)) {
+    throw new Error('Failed to extract DOM tree: empty result');
+  }
+  return extraction;
 }
 
 /**
@@ -339,20 +335,45 @@ export async function handleGetSnapshot(
   }
 
   try {
-    // 0. Проверяем кэш snapshot (если TTL > 0)
+    // 0. Проверяем кэш snapshot (если TTL > 0).
+    //    Кэш хранит ПОЛНЫЙ документ (ключ без detailLevel, АС[5]):
+    //    повторный вызов с другой детализацией перефильтровывается
+    //    из кэша через единый пайплайн БЕЗ обращения к браузеру.
     if (ttl > 0) {
-      const cacheKey = `${args.url || 'current'}:${detailLevel}`;
+      const cacheKey = args.url || 'current';
       const cached = snapshotCache.get(cacheKey);
       if (cached && (Date.now() - cached.timestamp) <ttl) {
+        const scrollable = computeScrollable(cached.fullDocument.canvas.viewport, cached.scrollContext);
+        // full=true — полный документ без вьюпорт/детализации фильтров (замена удалённого тула)
+        const filteredObjects = args.full
+          ? cached.fullDocument.objects
+          : filterObjectsByDetailLevel(
+              filterObjectsByViewport(
+                cached.fullDocument.objects,
+                computeVisibleWindow(cached.fullDocument.canvas.viewport, cached.scrollContext),
+              ),
+              detailLevel,
+            );
+        const filteredResult = { ...cached.fullDocument, objects: filteredObjects };
+
+        const executionTimeMs = Date.now() - startTime;
+        const resultJson = JSON.stringify(filteredResult);
+        const jsonSizeBytes = Buffer.byteLength(resultJson, 'utf-8');
+        const estimatedTokens = Math.ceil(jsonSizeBytes / 4);
+        const objectCount = countObjects(filteredObjects);
+        const totalObjectsCount = countObjects(cached.fullDocument.objects);
+
         return {
-          ...cached.result,
+          status: 'success',
+          data: filteredResult,
           metadata: {
-            ...cached.result.metadata,
-            json_size_bytes: cached.result.metadata?.json_size_bytes ?? 0,
-            estimated_tokens: cached.result.metadata?.estimated_tokens ?? 0,
-            object_count: cached.result.metadata?.object_count ?? 0,
-            execution_time_ms: Date.now() - startTime,
+            json_size_bytes: jsonSizeBytes,
+            estimated_tokens: estimatedTokens,
+            object_count: objectCount,
+            total_objects_count: totalObjectsCount,
             timestamp: new Date().toISOString(),
+            execution_time_ms: executionTimeMs,
+            scrollable,
           },
         };
       }
@@ -373,23 +394,23 @@ export async function handleGetSnapshot(
       };
     }
 
-    // 3. Извлекаем DOM-дерево в формате ExtractedElement[] (SDK-совместимый)
-    const extractedElements = await browser.evaluate(extractDomTreeInBrowser);
-
-    // 4. Получаем viewport размеры, URL и title страницы для SnapshotInput
-    const viewport = await browser.evaluate(() => ({
-      width: window.innerWidth,
-      height: window.innerHeight,
-    }));
+    // 3. Извлекаем полное DOM-дерево (без viewport culling).
+    //    Общий хелпер передаёт функцию в evaluate напрямую и разворачивает
+    //    обёртку результата (ошибка обработки — во внешнем try/catch).
+    const extraction = await extractDomTree(browser);
+    const extractedElements = extraction.elements;
+    const viewport = extraction.viewport;
     const url = args.url || (await browser.evaluate(() => window.location.href)) as string;
     const title = await browser.evaluate(() => document.title);
 
     // 5. Формируем SnapshotInput и передаём в SDK через ServerSession
+    //    (scroll — метаданные скролла для единого пайплайна отдачи, АС[3])
     const input: SnapshotInput = {
       viewport: viewport as { width: number; height: number },
       url,
       title: title as string,
       timestamp: new Date().toISOString(),
+      scroll: extraction.scroll,
     };
 
     // 6. SDK pipeline: segmentTree → buildVslDocument → cache → diff
@@ -408,13 +429,28 @@ export async function handleGetSnapshot(
     // Shared utility ensures consistent injection across getSnapshot, navigate, executeAction
     await injectVslIdsIntoDom(browser, currentDoc.objects);
 
-    // 9. Применяем фильтрацию по detail_level (DEC-027)
-    const filteredObjects = filterObjectsByDetailLevel(currentDoc.objects, detailLevel);
+    // 9. Единый пайплайн отдачи (АС[3]): вьюпорт-фильтр по абсолютным
+    //    координатам + скролл-контексту, затем detail_level (DEC-027).
+    //    full=true — полный документ без фильтров (замена удалённого тула vsl_get_full_json).
+    const scrollContext = session.getScrollContext();
+    const win = computeVisibleWindow(currentDoc.canvas.viewport, scrollContext);
+    const scrollable = computeScrollable(currentDoc.canvas.viewport, scrollContext);
+    const viewportFiltered = filterObjectsByViewport(currentDoc.objects, win);
+    const filteredObjects = args.full
+      ? currentDoc.objects
+      : filterObjectsByDetailLevel(viewportFiltered, detailLevel);
 
-    // 10. Формируем результат с отфильтрованными объектами
-    const filteredResult = isVslDiff(result)
-      ? { ...result, objects: filteredObjects }
-      : { ...result, objects: filteredObjects };
+    // 10. Формируем результат: документ — с отфильтрованными объектами;
+    //     дифф фильтруется по видимому окну отдельно (структура changes).
+    //     Баг идентичных веток исправлен: дифф больше не получает objects документа.
+    //     full=true обходит дифф-фёрст: отдаём полный документ целиком.
+    const filteredResult: SnapshotResult = isVslDiff(result) && !args.full
+      ? filterDiffByDetailLevel(
+          filterDiffByViewport(result, currentDoc, session.getPreviousSnapshot(), win),
+          currentDoc,
+          detailLevel,
+        )
+      : { ...currentDoc, objects: filteredObjects };
 
     // 11. Вычисляем метрики (DEC-029)
     const executionTimeMs = Date.now() - startTime;
@@ -422,28 +458,29 @@ export async function handleGetSnapshot(
     const jsonSizeBytes = Buffer.byteLength(resultJson, 'utf-8');
     const estimatedTokens = Math.ceil(jsonSizeBytes / 4);
     const objectCount = countObjects(filteredObjects);
+    // shown/total: показано после пайплайна (вьюпорт + detail), total — полный документ
+    const totalObjectsCount = countObjects(currentDoc.objects);
 
     const metadata: SnapshotMetadata = {
       json_size_bytes: jsonSizeBytes,
       estimated_tokens: estimatedTokens,
       object_count: objectCount,
+      total_objects_count: totalObjectsCount,
       timestamp: new Date().toISOString(),
       execution_time_ms: executionTimeMs,
+      scrollable,
     };
 
-    // 12. Сохраняем результат в кэш (если TTL > 0)
+    // 12. Сохраняем ПОЛНЫЙ документ в кэш (если TTL > 0, АС[5]).
+    //     Ключ без detailLevel: повторный вызов с другой детализацией
+    //     перефильтруется из кэша без обращения к браузеру.
     if (ttl > 0) {
-      const cacheKey = `${args.url || 'current'}:${detailLevel}`;
-      const resultToCache: GetSnapshotResult = {
-        status: 'success',
-        data: filteredResult,
-        metadata,
-      };
+      const cacheKey = args.url || 'current';
       snapshotCache.set(cacheKey, {
-        result: resultToCache,
+        fullDocument: currentDoc,
+        scrollContext: session.getScrollContext(),
         timestamp: Date.now(),
         url: args.url || 'current',
-        detailLevel,
       });
     }
 

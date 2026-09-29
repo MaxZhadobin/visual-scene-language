@@ -35,6 +35,9 @@ describe('vsl_execute_action', () => {
       launch: jest.fn(),
       close: jest.fn(),
       uploadFile: jest.fn(),
+      getDownloads: jest.fn(),
+      waitForDownload: jest.fn(),
+      saveDownload: jest.fn(),
     } as unknown as jest.Mocked<BrowserManager>;
 
     mockSession = {
@@ -44,6 +47,11 @@ describe('vsl_execute_action', () => {
       getDiff: jest.fn(),
       clear: jest.fn(),
       snapshotFromElements: jest.fn(),
+      // Единый пайплайн отдачи (АС[3]): скролл-контекст и предыдущий документ
+      getScrollContext: jest.fn().mockReturnValue(null),
+      getPreviousSnapshot: jest.fn().mockReturnValue(null),
+      // Скролл из кэша: явное обновление скролл-контекста после действия (dev5_scroll)
+      setScrollContext: jest.fn(),
     } as unknown as jest.Mocked<ServerSession>;
 
     // Дефолтные моки
@@ -459,6 +467,76 @@ describe('vsl_execute_action', () => {
       expect(result.error).toContain('Invalid scroll value format');
     });
 
+    it('скролл: состояние собирается из кэша без ре-экстракции', async () => {
+      // Полный документ в кэше с абсолютными координатами
+      mockSession.getSnapshot.mockReturnValue({
+        canvas: { url: 'https://example.com', viewport: { width: 100, height: 100 } },
+        objects: [
+          { id: 'a_0', t: 'button', p: [0, 0], s: [50, 50] },
+          { id: 'a_1', t: 'button', p: [0, 300], s: [50, 50] },
+        ],
+      } as never);
+      // Последовательность evaluate: URL-чек → hasVslIds → scrollBy → чтение скролла
+      mockBrowser.evaluate
+        .mockResolvedValueOnce('https://example.com' as never)
+        .mockResolvedValueOnce(true as never)
+        .mockResolvedValueOnce(undefined as never)
+        .mockResolvedValueOnce({ x: 0, y: 300, width: 100, height: 1000 } as never);
+
+      const result = await handleExecuteAction(
+        { action: 'scroll', target_id: 'page', value: 'down:300' },
+        mockBrowser,
+        mockSession,
+      );
+
+      expect(result.status).toBe('success');
+      // Ре-экстракции не было: ровно 4 evaluate-вызова
+      expect(mockBrowser.evaluate).toHaveBeenCalledTimes(4);
+      expect(mockSession.snapshotFromElements).not.toHaveBeenCalled();
+      // Скролл-контекст обновлён реальными значениями из браузера
+      expect(mockSession.setScrollContext).toHaveBeenCalledWith({ x: 0, y: 300, width: 100, height: 1000 });
+      // Снапшот отфильтрован по новому окну [300..400]: a_0 вне окна, a_1 виден
+      const state = result.data?.state as {
+        snapshot?: { objects: unknown[] };
+        scrollable?: { top: boolean; bottom: boolean };
+        diff?: unknown;
+      };
+      expect(state.scrollable).toEqual({ top: true, bottom: true });
+      const serialized = JSON.stringify(state.snapshot?.objects);
+      expect(serialized).toContain('a_1');
+      expect(serialized).not.toContain('a_0');
+      // Дифф при скролле не отдаётся (контент не меняется)
+      expect(state.diff).toBeUndefined();
+    });
+
+    it('скролл: серверный фолбэк когда браузер вернул не-объект', async () => {
+      mockSession.getSnapshot.mockReturnValue({
+        canvas: { url: 'https://example.com', viewport: { width: 100, height: 100 } },
+        objects: [],
+      } as never);
+      mockSession.getScrollContext.mockReturnValue({ x: 0, y: 0, width: 100, height: 1000 });
+      // Дефолт: все evaluate возвращают строку → чтение скролла невалидно → фолбэк
+      const result = await handleExecuteAction(
+        { action: 'scroll', target_id: 'page', value: 'down:300' },
+        mockBrowser,
+        mockSession,
+      );
+      expect(result.status).toBe('success');
+      // Фолбэк: старый контекст + дельта с клампом (300 <= 1000-100)
+      expect(mockSession.setScrollContext).toHaveBeenCalledWith({ x: 0, y: 300, width: 100, height: 1000 });
+    });
+
+    it('скролл: return_state=false не отдаёт состояние и не ре-экстрактирует', async () => {
+      const result = await handleExecuteAction(
+        { action: 'scroll', target_id: 'page', value: 'down', return_state: false },
+        mockBrowser,
+        mockSession,
+      );
+      expect(result.status).toBe('success');
+      expect(result.data?.state).toBeUndefined();
+      expect(mockSession.snapshotFromElements).not.toHaveBeenCalled();
+    });
+
     it('выполняет действие select с value', async () => {
       const result = await handleExecuteAction(
         { action: 'select', target_id: 'select_0', value: 'option1' },
@@ -665,24 +743,31 @@ describe('vsl_execute_action', () => {
 
     it('возвращает diff в state при return_state=true (default)', async () => {
       const mockElements = [{ id: 'test', type: 'button' }];
-      // 1. hasVslIds → true
-      // 2. click → page.click (не evaluate)
-      // 3. page.waitForTimeout (не evaluate)
-      // 4. стабилизация DOM (setTimeout 100ms) → undefined
-      // 5. currentUrl → 'https://example.com'
-      // 6. extractDomTreeInBrowser → mockElements
-      // 7. viewport → { width: 1024, height: 768 }
+      // 1. URL check → 'https://example.com' (совпадает, не навигирует)
+      // 2. hasVslIds → true
+      // 3. click → page.click (не evaluate)
+      // 4. page.waitForTimeout (не evaluate)
+      // 5. стабилизация DOM (setTimeout 100ms) → undefined
+      // 6. currentUrl → 'https://example.com'
+      // 7. getStateAfterAction: extractDomTree → обёртка
+      // 8. injectVslIdsIntoDom → undefined
       mockBrowser.evaluate
+        .mockResolvedValueOnce('https://example.com' as never)
         .mockResolvedValueOnce(true as never)
         .mockResolvedValueOnce(undefined as never)
         .mockResolvedValueOnce('https://example.com' as never)
-        .mockResolvedValueOnce(mockElements as never)
-        .mockResolvedValueOnce({ width: 1024, height: 768 } as never);
+        .mockResolvedValueOnce([{ __type: 'extraction_result', elements: mockElements, viewport: { width: 1024, height: 768 }, scroll: { x: 0, y: 0, width: 1024, height: 768 } }] as never)
+        .mockResolvedValueOnce(undefined as never);
 
       mockSession.getDiff.mockReturnValue({
-        changes: { added: [], modified: [], removed: [] },
+        changes: { added: [], modified: [], removed: [], unchanged_refs: [] },
       });
-      mockSession.getSnapshot.mockReturnValue({ canvas: { url: 'https://example.com' } } as never);
+      // Документ с viewport и objects — единый пайплайн отдачи (АС[3])
+      // фильтрует по видимому окну и требует полную структуру документа
+      mockSession.getSnapshot.mockReturnValue({
+        canvas: { url: 'https://example.com', viewport: { width: 1024, height: 768 } },
+        objects: [],
+      } as never);
 
       const result = await handleExecuteAction(
         { action: 'click', target_id: 'button_0' },
@@ -736,26 +821,29 @@ describe('vsl_execute_action', () => {
     it('автоматически создаёт snapshot если data-vsl-id отсутствуют в DOM', async () => {
       const mockElements = [{ id: 'btn_1', type: 'button', text: 'Click me' }];
 
-      // 1. hasVslIds → false (нет data-vsl-id)
-      // 2. extractDomTreeInBrowser → mockElements
-      // 3. viewport → { width: 1024, height: 768 }
+      // 1. URL check → 'https://example.com' (совпадает, не навигирует)
+      // 2. hasVslIds → false (нет data-vsl-id)
+      // 3. extractDomTree → обёртка (auto-snapshot)
       // 4. click → page.click (не evaluate)
       // 5. page.waitForTimeout (не evaluate)
       // 6. стабилизация DOM → undefined
       // 7. currentUrl → 'https://example.com'
-      // 8. getStateAfterAction: extractDomTreeInBrowser → mockElements
-      // 9. viewport → { width: 1024, height: 768 }
+      // 8. getStateAfterAction: extractDomTree → обёртка
+      // 9. injectVslIdsIntoDom → undefined
       mockBrowser.evaluate
+        .mockResolvedValueOnce('https://example.com' as never)
         .mockResolvedValueOnce(false as never)
-        .mockResolvedValueOnce(mockElements as never)
-        .mockResolvedValueOnce({ width: 1024, height: 768 } as never)
+        .mockResolvedValueOnce([{ __type: 'extraction_result', elements: mockElements, viewport: { width: 1024, height: 768 }, scroll: { x: 0, y: 0, width: 1024, height: 768 } }] as never)
         .mockResolvedValueOnce(undefined as never)
         .mockResolvedValueOnce('https://example.com' as never)
-        .mockResolvedValueOnce(mockElements as never)
-        .mockResolvedValueOnce({ width: 1024, height: 768 } as never);
+        .mockResolvedValueOnce([{ __type: 'extraction_result', elements: mockElements, viewport: { width: 1024, height: 768 }, scroll: { x: 0, y: 0, width: 1024, height: 768 } }] as never)
+        .mockResolvedValueOnce(undefined as never);
 
-      mockSession.getDiff.mockReturnValue({ changes: { added: [], modified: [], removed: [] } });
-      mockSession.getSnapshot.mockReturnValue({ canvas: { url: 'https://example.com' } } as never);
+      mockSession.getDiff.mockReturnValue({ changes: { added: [], modified: [], removed: [], unchanged_refs: [] } });
+      mockSession.getSnapshot.mockReturnValue({
+        canvas: { url: 'https://example.com', viewport: { width: 1024, height: 768 } },
+        objects: [],
+      } as never);
 
       const result = await handleExecuteAction(
         { action: 'click', target_id: 'button_0' },
@@ -774,18 +862,21 @@ describe('vsl_execute_action', () => {
       // 4. page.waitForTimeout (не evaluate)
       // 5. стабилизация DOM → undefined
       // 6. currentUrl → 'https://example.com'
-      // 7. getStateAfterAction: extractDomTreeInBrowser → []
-      // 8. viewport → { width: 1024, height: 768 }
+      // 7. getStateAfterAction: extractDomTree → обёртка
+      // 8. injectVslIdsIntoDom → undefined
       mockBrowser.evaluate
         .mockResolvedValueOnce('https://example.com' as never)
         .mockResolvedValueOnce(true as never)
         .mockResolvedValueOnce(undefined as never)
         .mockResolvedValueOnce('https://example.com' as never)
-        .mockResolvedValueOnce([] as never)
-        .mockResolvedValueOnce({ width: 1024, height: 768 } as never);
+        .mockResolvedValueOnce([{ __type: 'extraction_result', elements: [], viewport: { width: 1024, height: 768 }, scroll: { x: 0, y: 0, width: 1024, height: 768 } }] as never)
+        .mockResolvedValueOnce(undefined as never);
 
-      mockSession.getDiff.mockReturnValue({ changes: { added: [], modified: [], removed: [] } });
-      mockSession.getSnapshot.mockReturnValue({ canvas: { url: 'https://example.com' } } as never);
+      mockSession.getDiff.mockReturnValue({ changes: { added: [], modified: [], removed: [], unchanged_refs: [] } });
+      mockSession.getSnapshot.mockReturnValue({
+        canvas: { url: 'https://example.com', viewport: { width: 1024, height: 768 } },
+        objects: [],
+      } as never);
 
       const result = await handleExecuteAction(
         { action: 'click', target_id: 'button_0' },
@@ -816,6 +907,98 @@ describe('vsl_execute_action', () => {
       expect(result.status).toBe('error');
       expect(result.error).toContain('vsl_execute_action failed');
       expect(result.error).toContain('DOM extraction failed');
+    });
+  });
+
+  describe('действие download (Фаза 3: перенос из удалённого тула)', () => {
+    beforeEach(() => {
+      mockSession.hasSnapshot.mockReturnValue(true);
+      mockSession.getSnapshot.mockReturnValue({
+        canvas: { url: 'https://example.com' },
+      } as never);
+      // Дефолт: все evaluate возвращают 'https://example.com' (URL check, hasVslIds, стабилизация, клик)
+      mockBrowser.evaluate.mockResolvedValue('https://example.com' as never);
+      mockBrowser.getDownloads.mockReturnValue([]);
+      mockBrowser.waitForDownload.mockResolvedValue({
+        downloadId: 'dl_1',
+        filename: 'file.pdf',
+        url: 'https://example.com/file.pdf',
+        status: 'completed',
+        path: '/tmp/file.pdf',
+      } as never);
+    });
+
+    it('выполняет download кликом по элементу и ждёт завершения загрузки', async () => {
+      // 1-й вызов — downloadsBefore (пусто), 2-й вызов в поллинге — появилась новая загрузка
+      mockBrowser.getDownloads
+        .mockReturnValueOnce([])
+        .mockReturnValueOnce([{ downloadId: 'dl_1', filename: 'file.pdf', url: 'https://example.com/file.pdf' }]);
+
+      const result = await handleExecuteAction(
+        { action: 'download', target_id: 'link_0', return_state: false },
+        mockBrowser,
+        mockSession,
+      );
+
+      expect(result.status).toBe('success');
+      expect(result.data?.success).toBe(true);
+      expect(result.data?.download).toEqual({
+        downloadId: 'dl_1',
+        filename: 'file.pdf',
+        url: 'https://example.com/file.pdf',
+        status: 'completed',
+        path: '/tmp/file.pdf',
+      });
+      expect(mockBrowser.waitForDownload).toHaveBeenCalledWith('dl_1', undefined);
+      expect(mockBrowser.saveDownload).not.toHaveBeenCalled();
+    });
+
+    it('выполняет download по прямому URL и сохраняет файл через save_path', async () => {
+      mockBrowser.getDownloads
+        .mockReturnValueOnce([])
+        .mockReturnValueOnce([{ downloadId: 'dl_1', filename: 'file.pdf', url: 'https://example.com/file.pdf' }]);
+      mockBrowser.saveDownload.mockResolvedValue(undefined);
+
+      const result = await handleExecuteAction(
+        {
+          action: 'download',
+          target_id: 'link_0',
+          value: 'https://example.com/file.pdf',
+          save_path: '/tmp/custom.pdf',
+          timeout: 15000,
+          return_state: false,
+        },
+        mockBrowser,
+        mockSession,
+      );
+
+      expect(result.status).toBe('success');
+      expect(result.data?.download?.path).toBe('/tmp/custom.pdf');
+      expect(mockBrowser.waitForDownload).toHaveBeenCalledWith('dl_1', 15000);
+      expect(mockBrowser.saveDownload).toHaveBeenCalledWith('dl_1', '/tmp/custom.pdf');
+    });
+
+    it('возвращает ошибку если загрузка не появилась в течение таймаута поллинга', async () => {
+      mockBrowser.getDownloads.mockReturnValue([]);
+      // Мок времени: поллинг-цикл использует Date.now(); не ждать 5 секунд реального времени.
+      // 1-й вызов — startTime, 2-й — pollDeadline = 2000+5000, далее — условие цикла (немедленный выход)
+      const nowSpy = jest.spyOn(Date, 'now')
+        .mockReturnValueOnce(1000)
+        .mockReturnValueOnce(2000)
+        .mockReturnValue(9000);
+
+      try {
+        const result = await handleExecuteAction(
+          { action: 'download', target_id: 'link_0', return_state: false },
+          mockBrowser,
+          mockSession,
+        );
+
+        expect(result.status).toBe('error');
+        expect(result.error).toContain('Download not detected');
+      } finally {
+        nowSpy.mockRestore();
+      }
     });
   });
 });

@@ -64,6 +64,13 @@ export interface SnapshotInput {
   /** ISO 8601; фиксировать в тестах (детерминизм canvas.timestamp и диффа). */
   timestamp?: string;
   background?: string;
+  /**
+   * Метаданные скролла страницы (единый пайплайн отдачи): текущая позиция
+   * скролла + полные размеры документа. Используются сервером для
+   * фильтрации по видимому окну (абсолютные координаты → [scroll, scroll+viewport])
+   * и метаданных scrollable {top, bottom}. Optional: обратно-совместимо.
+   */
+  scroll?: { x: number; y: number; width: number; height: number };
 }
 
 /** Плоский индекс id → VslObject (обход дерева в глубину). */

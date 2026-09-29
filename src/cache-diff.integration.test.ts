@@ -11,9 +11,10 @@
  *    точечных мутациях (дифф ≤ 40% ⇔ экономия ≥ 60%);
  *  - пара 5 — валидность пустого диффа (идентичный повтор), вне ассерта
  *    экономии (нулевой числитель занизил бы честный агрегат);
- *  - resize-пара — отдельный тест: session вызывает invalidateCoordinates,
- *    дифф содержит modified только {id, p} (s — абсолютные px), объекты в
- *    p=[0,0] инвариантны к viewport и остаются unchanged.
+ *  - resize-пара — отдельный тест: session вызывает invalidateCoordinates;
+ *    p — абсолютные страница-релятивные пиксели (АС[2]), поэтому при
+ *    фиксированных data-rect resize даёт пустой дифф — все объекты в
+ *    unchanged_refs, coordHash всех записей обнулён.
  *
  * Отклонение от буквы dc_6 (пара 3): txt «Скачать»→«Экспортировать» и
  * удаление dialog разведены по двум последовательным диффам — объект
@@ -299,7 +300,7 @@ describe('Cache & Diff интеграция — фикстурные пары (T
     expect((1 - diffBytes / fullBytes) * 100).toBeGreaterThanOrEqual(60);
   });
 
-  it('resize 1280×800 → 1920×1080: modified только {id, p}; p=[0,0] unchanged; coordHash-инвалидация', () => {
+  it('resize 1280×800 → 1920×1080: абсолютные p инвариантны → пустой дифф; все в unchanged; coordHash обнулены', () => {
     const store = createCacheStore();
     const session = new VslSnapshotSession(store);
     document.body.innerHTML = DASHBOARD_HTML;
@@ -313,32 +314,23 @@ describe('Cache & Diff интеграция — фикстурные пары (T
       }),
     );
 
+    // p — абсолютные страница-релятивные пиксели (АС[2]): не зависят от
+    // размера окна, контент фикстуры неизменен → полностью пустой дифф.
     expect(diff.changes.added).toEqual([]);
+    expect(diff.changes.modified).toEqual([]);
     expect(diff.changes.removed).toEqual([]);
-    // p = [0, 0] у div_0 и nav_0_0 инвариантны к viewport
-    expect(diff.changes.unchanged_refs).toEqual(['div_0', 'nav_0_0']);
-    expect(diff.changes.modified.map((m) => m.id)).toEqual([
-      'a_0_0_0',
-      'a_0_0_1',
-      'main_0_1',
-      'div_0_1_0',
-      'div_0_1_0_0',
-      'div_0_1_0_1',
-      'button_0_1_1',
-      'div_0_1_2',
-      'section_0_1_2_0',
-      'section_0_1_2_1',
-      'div_0_1_3',
-      'button_0_1_3_0',
-    ]);
-    // s — абсолютные px (не зависят от viewport) → в modified только {id, p}
-    for (const m of diff.changes.modified) {
-      expect(Object.keys(m).sort()).toEqual(['id', 'p']);
-    }
+    expect([...diff.changes.unchanged_refs].sort()).toEqual(
+      [
+        'div_0', 'nav_0_0', 'a_0_0_0', 'a_0_0_1', 'main_0_1', 'div_0_1_0',
+        'div_0_1_0_0', 'div_0_1_0_1', 'button_0_1_1', 'div_0_1_2',
+        'section_0_1_2_0', 'section_0_1_2_1', 'div_0_1_3', 'button_0_1_3_0',
+      ].sort(),
+    );
 
-    // session вызвал invalidateCoordinates: unchanged-записи с обнулённым
-    // coordHash, modified — обновлены свежими значениями из нового документа
+    // session вызвал invalidateCoordinates («сброс координат» §5.2 при смене
+    // размера окна): все записи в кэше с обнулённым coordHash (страховка от
+    // reflow, который мог сдвинуть элементы при новом размере окна).
     expect(store.get('div_0')?.coordHash).toBe('');
-    expect(store.get('main_0_1')?.coordHash).not.toBe('');
+    expect(store.get('main_0_1')?.coordHash).toBe('');
   });
 });
