@@ -129,7 +129,10 @@ export async function handleGetVisual(
 
     // 4. Ищем элемент и делаем скриншот
     //    Используем CSS selector для поиска элемента
-    const selector = `[data-vsl-id="${args.element_id}"], #${args.element_id}, [id="${args.element_id}"]`;
+    // Резолв короткого ID в длинный через idMap (rw4_action_integration)
+    const idMap = session?.getIdMap() ?? new Map();
+    const resolvedId = idMap.get(args.element_id) || args.element_id;
+    const selector = `[data-vsl-id="${resolvedId}"], #${resolvedId}, [id="${resolvedId}"]`;
 
     // Проверяем, что элемент существует
     let elementExists = await browser.evaluate((sel: string) => {

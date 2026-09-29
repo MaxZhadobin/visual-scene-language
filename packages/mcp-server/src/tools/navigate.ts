@@ -15,6 +15,7 @@ import type { BrowserManager } from '../browser/manager.js';
 import type { ServerSession } from '../session/serverSession.js';
 import { extractDomTree } from './getSnapshot.js';
 import { injectVslIdsIntoDom } from '../utils/injectVslIds.js';
+import { replaceIdsInDocument } from '../utils/idMapper.js';
 import { filterObjectsByDetailLevel } from '../utils/detailLevelFilter.js';
 import { computeScrollable, computeVisibleWindow, filterObjectsByViewport, type ScrollableInfo } from '../utils/viewportFilter.js';
 import type { SnapshotInput } from '@thinkingos/vsl-sdk';
@@ -111,7 +112,9 @@ export async function handleNavigate(
       scrollableMeta = computeScrollable(currentDoc.canvas.viewport, scrollContext);
       const viewportFiltered = filterObjectsByViewport(currentDoc.objects, win);
       const filteredObjects = filterObjectsByDetailLevel(viewportFiltered, 'medium');
-      snapshot = { ...currentDoc, objects: filteredObjects };
+      // Заменяем длинные ID на короткие для выдачи LLM (rw3_output_integration)
+      const reverseIdMap = session.getReverseIdMap();
+      snapshot = replaceIdsInDocument({ ...currentDoc, objects: filteredObjects }, reverseIdMap);
     } catch (error) {
       // Snapshot extraction failed — log error and add warning
       const errorMessage = `Failed to extract snapshot: ${error instanceof Error ? error.message : String(error)}`;

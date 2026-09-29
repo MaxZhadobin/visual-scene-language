@@ -38,6 +38,7 @@ describe('vsl_get_visual', () => {
       getDiff: jest.fn(),
       clear: jest.fn(),
       snapshotFromElements: jest.fn(),
+      getIdMap: jest.fn().mockReturnValue(new Map()),
     } as unknown as jest.Mocked<ServerSession>;
 
     // Defaults

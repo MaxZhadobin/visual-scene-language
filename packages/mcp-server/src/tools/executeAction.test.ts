@@ -52,6 +52,8 @@ describe('vsl_execute_action', () => {
       getPreviousSnapshot: jest.fn().mockReturnValue(null),
       // Скролл из кэша: явное обновление скролл-контекста после действия (dev5_scroll)
       setScrollContext: jest.fn(),
+      getReverseIdMap: jest.fn().mockReturnValue(new Map()),
+      getIdMap: jest.fn().mockReturnValue(new Map()),
     } as unknown as jest.Mocked<ServerSession>;
 
     // Дефолтные моки
@@ -201,7 +203,7 @@ describe('vsl_execute_action', () => {
       mockBrowser.evaluate
         .mockResolvedValueOnce(snapshotUrl as never)
         .mockResolvedValueOnce(true as never)
-        .mockResolvedValueOnce(undefined as never)
+        .mockResolvedValueOnce(snapshotUrl as never)
         .mockResolvedValueOnce(snapshotUrl as never)
         .mockResolvedValueOnce([] as never)
         .mockResolvedValueOnce({ width: 1024, height: 768 } as never);
@@ -295,6 +297,25 @@ describe('vsl_execute_action', () => {
       expect(result.data?.target_id).toBe('button_0');
       expect(result.data?.success).toBe(true);
       expect(mockBrowser.evaluate).toHaveBeenCalled();
+    });
+    it('резолвит короткий ID в длинный через getIdMap перед кликом', async () => {
+      // Настраиваем маппинг: короткий ID btn_a3 → длинный ID button_0_0_0_2_2_0_1_0
+      const idMap = new Map([['btn_a3', 'button_0_0_0_2_2_0_1_0']]);
+      mockSession.getIdMap.mockReturnValue(idMap);
+
+      const result = await handleExecuteAction(
+        { action: 'click', target_id: 'btn_a3' },
+        mockBrowser,
+        mockSession,
+      );
+
+      expect(result.status).toBe('success');
+      expect(result.data?.target_id).toBe('btn_a3');
+      // Проверяем, что page.click вызван с селектором, содержащим длинный ID
+      expect(mockPage.click).toHaveBeenCalled();
+      const clickSelector = mockPage.click.mock.calls[0][0];
+      expect(clickSelector).toContain('button_0_0_0_2_2_0_1_0');
+      expect(clickSelector).toContain('data-vsl-id');
     });
 
     it('выполняет действие type с value', async () => {

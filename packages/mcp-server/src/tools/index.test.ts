@@ -60,6 +60,7 @@ describe('tools/index.ts — MCP-compliant result handling', () => {
       getDiff: jest.fn().mockReturnValue(null),
       clear: jest.fn(),
       snapshotFromElements: jest.fn(),
+      getIdMap: jest.fn().mockReturnValue(new Map()),
     } as unknown as jest.Mocked<ServerSession>;
 
     // Mock SessionManager

@@ -18,6 +18,7 @@ import type { McpServerConfig } from '../config/loader.js';
 import type { VslDocument, VslObject, SnapshotInput, SnapshotResult } from '@thinkingos/vsl-sdk';
 import { isVslDiff } from '@thinkingos/vsl-sdk';
 import { injectVslIdsIntoDom } from '../utils/injectVslIds.js';
+import { replaceIdsInDocument, replaceIdsInDiff } from '../utils/idMapper.js';
 import { filterDiffByDetailLevel, filterObjectsByDetailLevel, type DetailLevel } from '../utils/detailLevelFilter.js';
 import { computeScrollable, computeVisibleWindow, filterDiffByViewport, filterObjectsByViewport, type ScrollableInfo, type ScrollContext } from '../utils/viewportFilter.js';
 
@@ -452,9 +453,16 @@ export async function handleGetSnapshot(
         )
       : { ...currentDoc, objects: filteredObjects };
 
+    // 10.5. Заменяем длинные ID на короткие для выдачи LLM (rw3_output_integration)
+    // Получаем обратную карту longId→shortId из сессии
+    const reverseIdMap = session.getReverseIdMap();
+    const finalResult: SnapshotResult = isVslDiff(filteredResult)
+      ? replaceIdsInDiff(filteredResult, reverseIdMap)
+      : replaceIdsInDocument(filteredResult as VslDocument, reverseIdMap);
+
     // 11. Вычисляем метрики (DEC-029)
     const executionTimeMs = Date.now() - startTime;
-    const resultJson = JSON.stringify(filteredResult);
+    const resultJson = JSON.stringify(finalResult);
     const jsonSizeBytes = Buffer.byteLength(resultJson, 'utf-8');
     const estimatedTokens = Math.ceil(jsonSizeBytes / 4);
     const objectCount = countObjects(filteredObjects);
@@ -486,7 +494,7 @@ export async function handleGetSnapshot(
 
     return {
       status: 'success',
-      data: filteredResult,
+      data: finalResult,
       metadata,
     };
   } catch (error) {

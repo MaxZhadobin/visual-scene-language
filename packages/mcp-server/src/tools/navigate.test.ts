@@ -45,6 +45,7 @@ describe('vsl_navigate', () => {
       snapshotFromElements: jest.fn(),
       // Единый пайплайн отдачи (АС[3]): скролл-контекст последнего снапшота
       getScrollContext: jest.fn().mockReturnValue(null),
+      getReverseIdMap: jest.fn().mockReturnValue(new Map()),
     } as unknown as jest.Mocked<ServerSession>;
   });
 

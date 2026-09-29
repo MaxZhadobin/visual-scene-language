@@ -23,6 +23,7 @@
  *  - hasSnapshot() — проверить наличие snapshot
  */
 
+import { buildIdMap, buildReverseIdMap } from '../utils/idMapper.js';
 import { diffVslDocuments, segmentTree, buildVslDocument, type VslDiff, type VslDocument, type SnapshotInput, type SnapshotResult, type ExtractedElement } from '@thinkingos/vsl-sdk';
 import type { ScrollContext } from '../utils/viewportFilter.js';
 
@@ -37,6 +38,10 @@ export class ServerSession {
   private onSnapshotChange: (() => void) | null = null;
   /** Метаданные скролла последнего снапшота (единый пайплайн отдачи, АС[3]). */
   private scrollContext: ScrollContext | null = null;
+  /** Карта shortId → longId для маппинга коротких ID в длинные (rw1_idmapper). */
+  private idMap: Map<string, string> = new Map();
+  /** Обратная карта longId → shortId для замены ID в выдаче LLM. */
+  private reverseIdMap: Map<string, string> = new Map();
 
   /**
    * Регистрирует callback для уведомлений об изменении snapshot.
@@ -59,6 +64,15 @@ export class ServerSession {
     this.version += 1;
     // Путь setSnapshot (HTTP-путь read_page) не несёт данных о скролле
     this.scrollContext = null;
+
+    // Строим карты маппинга ID для нового снапшота
+    if (doc.objects) {
+      this.idMap = buildIdMap(doc.objects);
+      this.reverseIdMap = buildReverseIdMap(doc.objects);
+    } else {
+      this.idMap = new Map();
+      this.reverseIdMap = new Map();
+    }
 
     // Уведомляем подписчиков об изменении
     if (this.onSnapshotChange) {
@@ -93,6 +107,15 @@ export class ServerSession {
 
     // Сохраняем метаданные скролла для единого пайплайна отдачи (АС[3])
     this.scrollContext = input.scroll ? { ...input.scroll } : null;
+
+    // Строим карты маппинга ID для нового снапшота
+    if (doc.objects) {
+      this.idMap = buildIdMap(doc.objects);
+      this.reverseIdMap = buildReverseIdMap(doc.objects);
+    } else {
+      this.idMap = new Map();
+      this.reverseIdMap = new Map();
+    }
 
     // Уведомляем подписчиков об изменении
     if (this.onSnapshotChange) {
@@ -162,6 +185,8 @@ export class ServerSession {
     this.previousDocument = null;
     this.version = 0;
     this.scrollContext = null;
+    this.idMap = new Map();
+    this.reverseIdMap = new Map();
   }
 
   /**
@@ -185,5 +210,21 @@ export class ServerSession {
    */
   setScrollContext(scroll: ScrollContext | null): void {
     this.scrollContext = scroll;
+  }
+
+  /**
+   * Возвращает карту shortId → longId для маппинга коротких ID в длинные.
+   * Используется в executeAction/getVisual для резолвинга коротких ID от агента.
+   */
+  getIdMap(): Map<string, string> {
+    return this.idMap;
+  }
+
+  /**
+   * Возвращает обратную карту longId → shortId для замены ID в выдаче LLM.
+   * Используется в путях отдачи для замены длинных ID на короткие.
+   */
+  getReverseIdMap(): Map<string, string> {
+    return this.reverseIdMap;
   }
 }

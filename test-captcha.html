@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test Captcha</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            background: #f5f5f5;
+        }
+        .captcha-container {
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            max-width: 400px;
+        }
+        h2 {
+            margin-top: 0;
+            color: #333;
+        }
+        .captcha-question {
+            font-size: 24px;
+            font-weight: bold;
+            margin: 20px 0;
+            padding: 15px;
+            background: #e8f4f8;
+            border-radius: 4px;
+            text-align: center;
+        }
+        .captcha-input {
+            width: 100%;
+            padding: 12px;
+            font-size: 16px;
+            border: 2px solid #ddd;
+            border-radius: 4px;
+            box-sizing: border-box;
+            margin-bottom: 15px;
+        }
+        .captcha-input:focus {
+            outline: none;
+            border-color: #4CAF50;
+        }
+        .verify-btn {
+            width: 100%;
+            padding: 12px;
+            font-size: 16px;
+            background: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .verify-btn:hover {
+            background: #45a049;
+        }
+        .result {
+            margin-top: 15px;
+            padding: 10px;
+            border-radius: 4px;
+            text-align: center;
+            display: none;
+        }
+        .result.success {
+            background: #d4edda;
+            color: #155724;
+            display: block;
+        }
+        .result.error {
+            background: #f8d7da;
+            color: #721c24;
+            display: block;
+        }
+        .refresh-btn {
+            background: #2196F3;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-bottom: 15px;
+        }
+    </style>
+</head>
+<body>
+    <div class="captcha-container">
+        <h2>🔒 Проверка безопасности</h2>
+        <p>Решите пример, чтобы подтвердить, что вы не робот:</p>
+        <div class="captcha-question" id="captcha-question">Loading...</div>
+        <button class="refresh-btn" id="refresh-btn" onclick="generateCaptcha()"> Новый пример</button>
+        <input type="number" class="captcha-input" id="captcha-input" placeholder="Ваш ответ">
+        <button class="verify-btn" id="verify-btn" onclick="verifyCaptcha()">✓ Проверить</button>
+        <div class="result" id="result"></div>
+    </div>
+
+    <script>
+        let num1, num2, answer;
+
+        function generateCaptcha() {
+            num1 = Math.floor(Math.random() * 20) + 1;
+            num2 = Math.floor(Math.random() * 20) + 1;
+            const operators = ['+', '-', '*'];
+            const operator = operators[Math.floor(Math.random() * operators.length)];
+            
+            switch(operator) {
+                case '+': answer = num1 + num2; break;
+                case '-': answer = num1 - num2; break;
+                case '*': answer = num1 * num2; break;
+            }
+            
+            document.getElementById('captcha-question').textContent = `${num1} ${operator} ${num2} = ?`;
+            document.getElementById('captcha-input').value = '';
+            document.getElementById('result').className = 'result';
+            document.getElementById('result').style.display = 'none';
+        }
+
+        function verifyCaptcha() {
+            const userAnswer = parseInt(document.getElementById('captcha-input').value);
+            const resultDiv = document.getElementById('result');
+            
+            if (isNaN(userAnswer)) {
+                resultDiv.textContent = ' Пожалуйста, введите число';
+                resultDiv.className = 'result error';
+                return;
+            }
+            
+            if (userAnswer === answer) {
+                resultDiv.textContent = '✅ Капча пройдена успешно!';
+                resultDiv.className = 'result success';
+            } else {
+                resultDiv.textContent = '❌ Неверный ответ. Попробуйте ещё раз.';
+                resultDiv.className = 'result error';
+                generateCaptcha();
+            }
+        }
+
+        // Enter key support
+        document.getElementById('captcha-input').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                verifyCaptcha();
+            }
+        });
+
+        // Initialize
+        generateCaptcha();
+    </script>
+</body>
+</html>

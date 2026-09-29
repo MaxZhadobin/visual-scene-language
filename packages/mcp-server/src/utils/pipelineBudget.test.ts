@@ -236,7 +236,6 @@ describe('пайплайнБаджет: имитация Хабра (рв5_са�
 
     const fullBytes = Buffer.byteLength(JSON.stringify(doc), 'utf8');
     // Информационный вывод для контроля бюджета
-    // eslint-disable-next-line no-console
     console.log(`Имитация Хабра: полный=${fullBytes}Б, лоу=${bytes}Б (${Math.round((bytes / fullBytes) * 100)}%)`);
 
     expect(maxTop(low)).toBeLessThan(VIEWPORT.height);

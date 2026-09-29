@@ -21,6 +21,41 @@ function makeDoc(id: string): VslDocument {
   } as unknown as VslDocument;
 }
 
+/** VSL document с несколькими объектами для тестов idMap. */
+function makeMultiDoc(id: string): VslDocument {
+  return {
+    version: '1.0',
+    viewport: { width: 1024, height: 768 },
+    state: { id },
+    objects: [
+      {
+        id: 'button_0_0_0_2_2_0_1_0_1_0_1_0_1_1_0_4',
+        type: 'button',
+        state: 'idle',
+        actions: ['click'],
+        text: 'Кнопка',
+        rect: { x: 0, y: 0, width: 100, height: 40 },
+      },
+      {
+        id: 'input_0_0_0_2_2_0_1_0_1_0_1_0_1_1_0_0_1_0_0_0',
+        type: 'input',
+        state: 'idle',
+        actions: ['type'],
+        text: '',
+        rect: { x: 0, y: 50, width: 200, height: 30 },
+      },
+      {
+        id: 'div_0_1',
+        type: 'container',
+        state: 'idle',
+        actions: [],
+        text: null,
+        rect: { x: 0, y: 100, width: 300, height: 200 },
+      },
+    ],
+  } as unknown as VslDocument;
+}
+
 describe('ServerSession', () => {
   let session: ServerSession;
 
@@ -148,6 +183,67 @@ describe('ServerSession', () => {
       session.setSnapshot(makeDoc('v2'));
       expect(callback1).toHaveBeenCalledTimes(1); // not called again
       expect(callback2).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('idMap (rw1_idmapper)', () => {
+    it('строит карты idMap при setSnapshot', () => {
+      const doc = makeMultiDoc('v1');
+      session.setSnapshot(doc);
+
+      const idMap = session.getIdMap();
+      const reverseIdMap = session.getReverseIdMap();
+
+      expect(idMap.size).toBe(3);
+      expect(reverseIdMap.size).toBe(3);
+
+      // Короткие ID → длинные
+      expect(idMap.get('btn_0')).toBe('button_0_0_0_2_2_0_1_0_1_0_1_0_1_1_0_4');
+      expect(idMap.get('inp_0')).toBe('input_0_0_0_2_2_0_1_0_1_0_1_0_1_1_0_0_1_0_0_0');
+      expect(idMap.get('div_0')).toBe('div_0_1');
+
+      // Длинные ID → короткие
+      expect(reverseIdMap.get('button_0_0_0_2_2_0_1_0_1_0_1_0_1_1_0_4')).toBe('btn_0');
+      expect(reverseIdMap.get('input_0_0_0_2_2_0_1_0_1_0_1_0_1_1_0_0_1_0_0_0')).toBe('inp_0');
+      expect(reverseIdMap.get('div_0_1')).toBe('div_0');
+    });
+
+    it('возвращает пустые карты если objects отсутствует', () => {
+      const doc = { version: '1.0', viewport: { width: 1024, height: 768 }, state: { id: 'v1' } } as unknown as VslDocument;
+      session.setSnapshot(doc);
+
+      expect(session.getIdMap().size).toBe(0);
+      expect(session.getReverseIdMap().size).toBe(0);
+    });
+
+    it('перестраивает карты при новом setSnapshot', () => {
+      session.setSnapshot(makeMultiDoc('v1'));
+      expect(session.getIdMap().size).toBe(3);
+
+      // Новый snapshot с другим набором объектов
+      const doc2 = {
+        version: '1.0',
+        viewport: { width: 1024, height: 768 },
+        state: { id: 'v2' },
+        objects: [
+          { id: 'a_0_1_0', type: 'link', state: 'idle', actions: ['click'], text: 'Ссылка', rect: { x: 0, y: 0, width: 50, height: 20 } },
+        ],
+      } as unknown as VslDocument;
+      session.setSnapshot(doc2);
+
+      const idMap = session.getIdMap();
+      expect(idMap.size).toBe(1);
+      expect(idMap.get('a_0')).toBe('a_0_1_0');
+    });
+
+    it('clear() сбрасывает карты idMap', () => {
+      session.setSnapshot(makeMultiDoc('v1'));
+      expect(session.getIdMap().size).toBe(3);
+
+      session.clear();
+
+      expect(session.getIdMap().size).toBe(0);
+      expect(session.getReverseIdMap().size).toBe(0);
     });
   });
 });

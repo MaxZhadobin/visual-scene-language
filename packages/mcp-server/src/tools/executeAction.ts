@@ -27,6 +27,7 @@ import { computeToolMetrics } from '../utils/metrics.js';
 import { extractDomTree } from './getSnapshot.js';
 import { injectVslIdsIntoDom } from '../utils/injectVslIds.js';
 import { filterDiffByDetailLevel, filterObjectsByDetailLevel } from '../utils/detailLevelFilter.js';
+import { replaceIdsInDocument, replaceIdsInDiff } from '../utils/idMapper.js';
 import { computeScrollable, computeVisibleWindow, filterDiffByViewport, filterObjectsByViewport, type ScrollableInfo, type ScrollContext } from '../utils/viewportFilter.js';
 
 /** Поддерживаемые действия. */
@@ -144,7 +145,11 @@ async function getStateAfterAction(
     const viewportFiltered = filterObjectsByViewport(fullDoc.objects, win);
     const filteredObjects = filterObjectsByDetailLevel(viewportFiltered, 'medium');
     const snapshot = { ...fullDoc, objects: filteredObjects };
-    return { diff: filteredDiff, snapshot, scrollable };
+    // Заменяем длинные ID на короткие для выдачи LLM (rw3_output_integration)
+    const reverseIdMap = session.getReverseIdMap();
+    const finalSnapshot = replaceIdsInDocument(snapshot, reverseIdMap);
+    const finalDiff = filteredDiff ? replaceIdsInDiff(filteredDiff, reverseIdMap) : filteredDiff;
+    return { diff: finalDiff, snapshot: finalSnapshot, scrollable };
   } catch (error) {
     // Если не удалось получить состояние, возвращаем ошибку
     const errorMessage = `Failed to get state after action: ${error instanceof Error ? error.message : String(error)}`;
@@ -196,7 +201,10 @@ function buildScrollStateFromCache(
     const viewportFiltered = filterObjectsByViewport(fullDoc.objects ?? [], win);
     const filteredObjects = filterObjectsByDetailLevel(viewportFiltered, 'medium');
     const snapshot = { ...fullDoc, objects: filteredObjects };
-    return { snapshot, scrollable };
+    // Заменяем длинные ID на короткие для выдачи LLM (rw3_output_integration)
+    const reverseIdMap = session.getReverseIdMap();
+    const finalSnapshot = replaceIdsInDocument(snapshot, reverseIdMap);
+    return { snapshot: finalSnapshot, scrollable };
   } catch (error) {
     const errorMessage = `Failed to build scroll state from cache: ${error instanceof Error ? error.message : String(error)}`;
     console.error('[vsl_execute_action]', errorMessage, error);
@@ -341,7 +349,10 @@ export async function handleExecuteAction(
       session.snapshotFromElements(extraction.elements, input);
     }
 
-    const selector = `[data-vsl-id="${args.target_id}"], #${args.target_id}, .${args.target_id}`;
+    // Резолв короткого ID в длинный через idMap (rw4_action_integration)
+    const idMap = session.getIdMap();
+    const resolvedId = idMap.get(args.target_id) || args.target_id;
+    const selector = `[data-vsl-id="${resolvedId}"], #${resolvedId}, .${resolvedId}`;
 
     // 5. Выполняем действие
     const page = await browser.getPage();

@@ -21,6 +21,7 @@ import type { VslDocument, VslObject } from '@thinkingos/vsl-sdk';
 import { computeToolMetrics } from '../utils/metrics.js';
 import { extractViaHttp, detectSpa, applyReadableFilter, extractTextContent, extractTitle, countWords } from './httpExtractor.js';
 import { filterDiffByDetailLevel, filterObjectsByDetailLevel, type DetailLevel } from '../utils/detailLevelFilter.js';
+import { replaceIdsInDocument, replaceIdsInDiff } from '../utils/idMapper.js';
 import { extractDomTree } from './getSnapshot.js';
 import { injectVslIdsIntoDom } from '../utils/injectVslIds.js';
 import { computeScrollable, computeVisibleWindow, filterDiffByViewport, filterObjectsByViewport, type ScrollableInfo } from '../utils/viewportFilter.js';
@@ -201,14 +202,18 @@ export async function handleReadPage(
             detailLevel,
           )
         : rawDiff;
+        // Заменяем длинные ID на короткие для выдачи LLM (rw3_output_integration)
+        const reverseIdMap = session.getReverseIdMap();
+        const finalSnapshot = replaceIdsInDocument(fullSnapshot, reverseIdMap);
+        const finalDiff = fullDiff ? replaceIdsInDiff(fullDiff, reverseIdMap) : fullDiff;
 
       const data = {
         url: args.url,
         mode: 'render' as const,
         content,
         vslDocument: rawSnapshot,
-        snapshot: fullSnapshot,
-        diff: fullDiff,
+        snapshot: finalSnapshot,
+        diff: finalDiff,
         hasDiff,
         metadata: {
           title: extractTitle(html),
@@ -257,14 +262,18 @@ export async function handleReadPage(
           detailLevel,
         )
       : rawDiff;
+      // Заменяем длинные ID на короткие для выдачи LLM (rw3_output_integration)
+      const reverseIdMap = session.getReverseIdMap();
+      const finalSnapshot = replaceIdsInDocument(fullSnapshot, reverseIdMap);
+      const finalDiff = fullDiff ? replaceIdsInDiff(fullDiff, reverseIdMap) : fullDiff;
 
     const data = {
       url: args.url,
       mode: 'http' as const,
       content: httpResult.textContent,
       vslDocument: httpResult.vslDocument,
-      snapshot: fullSnapshot,
-      diff: fullDiff,
+      snapshot: finalSnapshot,
+      diff: finalDiff,
       hasDiff,
       metadata: {
         title: httpResult.title,

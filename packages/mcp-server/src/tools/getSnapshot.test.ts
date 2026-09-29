@@ -79,6 +79,7 @@ describe('vsl_get_snapshot', () => {
       // Единый пайплайн отдачи (АС[3]): скролл-контекст и предыдущий документ
       getScrollContext: jest.fn().mockReturnValue(null),
       getPreviousSnapshot: jest.fn().mockReturnValue(null),
+      getReverseIdMap: jest.fn().mockReturnValue(new Map()),
     } as unknown as jest.Mocked<ServerSession>;
 
     mockConfig = {

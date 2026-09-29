@@ -60,6 +60,7 @@ describe('vsl_read_page', () => {
       }),
       getScrollContext: jest.fn().mockReturnValue(null),
       getPreviousSnapshot: jest.fn().mockReturnValue(null),
+      getReverseIdMap: jest.fn().mockReturnValue(new Map()),
     } as unknown as jest.Mocked<ServerSession>;
 
     mockConfig = {
