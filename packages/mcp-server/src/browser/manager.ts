@@ -44,6 +44,25 @@ interface PlaywrightFileChooser {
   setFiles(files: string | string[]): Promise<void>;
 }
 
+/** Тип для Playwright Frame (динамический импорт). */
+export interface PlaywrightFrame {
+  url(): string;
+  name(): string;
+  parentFrame(): PlaywrightFrame | null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  evaluate<T>(fn: string | ((...args: any[]) => T), ...args: any[]): Promise<T>;
+  locator(selector: string): PlaywrightLocator;
+}
+
+/** Тип для Playwright Locator (динамический импорт). */
+interface PlaywrightLocator {
+  click(options?: { timeout?: number }): Promise<void>;
+  fill(value: string, options?: { timeout?: number }): Promise<void>;
+  press(key: string, options?: { timeout?: number }): Promise<void>;
+  selectOption(value: string, options?: { timeout?: number }): Promise<string[]>;
+  setInputFiles(files: string | string[], options?: { timeout?: number }): Promise<void>;
+}
+
 /** Тип для Playwright Page (динамический импорт). */
 interface PlaywrightPage {
   goto(url: string, options?: { timeout?: number; waitUntil?: string }): Promise<unknown>;
@@ -62,6 +81,9 @@ interface PlaywrightPage {
   waitForEvent(event: string, optionsOrPredicate?: { timeout?: number } | ((arg: unknown) => boolean)): Promise<PlaywrightFileChooser>;
   $eval(selector: string, fn: string | ((el: Element) => unknown)): Promise<unknown>;
   context(): PlaywrightBrowserContext;
+  frames(): PlaywrightFrame[];
+  frame(urlOrName: string | RegExp): PlaywrightFrame | null;
+  locator(selector: string): PlaywrightLocator;
 }
 
 /** Тип для Playwright Chromium. */
@@ -185,6 +207,37 @@ export class BrowserManager {
   /**
    * Выполняет JavaScript в контексте страницы.
    */
+  /**
+   * Возвращает все фреймы на странице (включая iframe).
+   */
+  async getFrames(): Promise<PlaywrightFrame[]> {
+    const page = await this.getPage();
+    return page.frames();
+  }
+
+  /**
+   * Находит фрейм по URL или имени.
+   */
+  async getFrame(urlOrName: string | RegExp): Promise<PlaywrightFrame | null> {
+    const page = await this.getPage();
+    return page.frame(urlOrName);
+  }
+
+  /**
+   * Выполняет JavaScript в контексте конкретного фрейма.
+   */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  async evaluateInFrame<T>(frame: PlaywrightFrame, fn: string | ((...args: any[]) => T), ...args: any[]): Promise<T> {
+    return frame.evaluate(fn, ...args);
+  }
+
+  /**
+   * Возвращает Playwright Locator для элемента в фрейме.
+   */
+  async locatorInFrame(frame: PlaywrightFrame, selector: string): Promise<PlaywrightLocator> {
+    return frame.locator(selector);
+  }
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   async evaluate<T>(fn: string | ((...args: any[]) => T), ...args: any[]): Promise<T> {
     const page = await this.getPage();

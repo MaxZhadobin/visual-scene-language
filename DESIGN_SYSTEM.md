@@ -158,6 +158,7 @@ VSL должен позволять добавлять новые типы эл�
 - `canvas` — canvas/WebGL
 - `video` — видео
 - `audio` — аудио
+- `iframe` — iframe (cross-origin, содержит sub-VSL документ)
 
 ### 3.2 Property Names
 
@@ -179,6 +180,7 @@ VSL должен позволять добавлять новые типы эл�
 | `actions` | `act` | array | Доступные действия |
 | `hasPopup` | `hasPopup` | string | Тип popup для dropdown_toggle (menu, listbox) |
 | `metadata` | `meta` | object | Мета-данные |
+| `iframe` | `iframe` | object | Iframe данные (url, frameId, sub-VSL) |
 
 ### 3.3 State Descriptors
 
@@ -238,6 +240,46 @@ VSL должен позволять добавлять новые типы эл�
 {
   "act": ["click", "type", "focus", "hover"]
 }
+### 3.5 Iframe Target ID Format (M2.1)
+
+Элементы внутри iframe имеют target_id с frame-префиксом:
+
+- Формат: `frame_{frameId}:{localId}` (например, `frame_3:button_0_1`)
+- `frameId` — Chrome frameId (число), присваивается браузером
+- `localId` — обычный VSL id внутри iframe (формат `tag_index1_index2_...`)
+- Background извлекает frameId через `parseFramePrefix(targetId)`
+- Если префикс отсутствует — элемент в топ-фрейме, localId = исходный targetId
+
+**Пример:**
+
+{
+  "action": "click",
+  "target_id": "frame_3:button_0_1"
+}
+
+
+Background парсит `frame_3:button_0_1` → `frameId=3`, `localId=button_0_1`, маршрутизирует execute в content script фрейма 3. Content script в iframe резолвит `button_0_1` через `resolveTarget` относительно `document.body` iframe — без изменений в executor.
+
+### 3.5.1 MCP Server Iframe Target ID Format (Playwright)
+
+MCP server использует Playwright frame API для работы с cross-origin iframe:
+
+- **Target ID формат:** `iframe_${frameIndex}:${localId}` (например, `iframe_1:button_0_1`)
+- **frameIndex** — индекс в `page.frames()` массиве (frames[0] — main frame, поэтому используется `frames[index + 1]`)
+- **Execute routing:** `executeAction` парсит `iframe_N:localId` через regex `/^iframe_(\d+):(.+)$/`, получает frames через `browser.getFrames()`, назначает `targetFrame = frames[frameIndex + 1]`, маршрутизирует действие через `target.locator(selector)` (polymorphic `target = targetFrame || page`)
+- **Frame-aware actions:** click, fill, upload, select, blur, focus, download — все используют polymorphic `target` variable
+
+**Пример:**
+
+{
+  "action": "click",
+  "target_id": "iframe_1:button_0_1"
+}
+
+executeAction парсит `iframe_1:button_0_1` → `frameIndex=1`, `localId=button_0_1`, получает `targetFrame = frames[2]` (frames[0] — main frame), использует `targetFrame.locator(selector).click()` для клика внутри iframe контекста.
+
+→ Implementation: [executeAction.ts L354-375](./packages/mcp-server/src/tools/executeAction.ts)
+
 ---
 
 ## 4. Data Model Structure

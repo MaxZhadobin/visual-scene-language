@@ -90,18 +90,31 @@ export function buildIdMap(objects: readonly VslObject[]): Map<string, string> {
   const map = new Map<string, string>();
   const counters = new Map<string, number>(); // prefix → next counter
 
-  function visit(obj: VslObject): void {
+  function visit(obj: VslObject, framePrefix?: string): void {
     const tag = extractTag(obj.id);
     const prefix = tagPrefix(tag);
     const counter = counters.get(prefix) ?? 0;
     counters.set(prefix, counter + 1);
 
-    const shortId = `${prefix}_${toBase36(counter)}`;
+    // Формируем shortId с frame prefix если внутри iframe
+    const shortId = framePrefix 
+      ? `${framePrefix}:${prefix}_${toBase36(counter)}`
+      : `${prefix}_${toBase36(counter)}`;
     map.set(shortId, obj.id);
 
+    // Рекурсия для children
     if (obj.ch) {
       for (const child of obj.ch) {
-        visit(child);
+        visit(child, framePrefix);
+      }
+    }
+
+    // Рекурсия для iframe.vsl.objects с frame prefix
+    if (obj.iframe?.vsl?.objects) {
+      const frameIndex = obj.iframe.frameId;
+      const iframeFramePrefix = `iframe_${frameIndex}`;
+      for (const iframeObj of obj.iframe.vsl.objects) {
+        visit(iframeObj, iframeFramePrefix);
       }
     }
   }
@@ -140,6 +153,16 @@ export function replaceIdsInDocument<T extends { objects?: VslObject[] }>(
     const result: VslObject = { ...obj, id: shortId };
     if (obj.ch) {
       result.ch = obj.ch.map(replaceObj);
+    }
+    // Рекурсивная замена ID в iframe.vsl.objects
+    if (obj.iframe?.vsl?.objects) {
+      result.iframe = {
+        ...obj.iframe,
+        vsl: {
+          ...obj.iframe.vsl,
+          objects: obj.iframe.vsl.objects.map(replaceObj),
+        },
+      };
     }
     return result;
   }
@@ -220,6 +243,17 @@ function replaceIdsInVslObject(
 
   if (obj.ch && obj.ch.length > 0) {
     result.ch = obj.ch.map(child => replaceIdsInVslObject(child, reverseIdMap));
+  }
+
+  // Рекурсивная замена ID в iframe.vsl.objects
+  if (obj.iframe?.vsl?.objects) {
+    result.iframe = {
+      ...obj.iframe,
+      vsl: {
+        ...obj.iframe.vsl,
+        objects: obj.iframe.vsl.objects.map(child => replaceIdsInVslObject(child, reverseIdMap)),
+      },
+    };
   }
 
   return result;

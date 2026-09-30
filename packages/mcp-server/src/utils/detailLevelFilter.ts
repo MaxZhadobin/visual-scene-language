@@ -67,6 +67,7 @@ export const CONTAINER_TYPES: ReadonlySet<string> = new Set<string>([
   'header',
   'main',
   'footer',
+  'iframe', // M2.1: iframe objects contain sub-VSL documents
 ]);
 
 /**

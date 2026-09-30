@@ -179,11 +179,13 @@ describe('vsl_get_snapshot', () => {
     // 1. extractDomTree() -> обёртка [{__type, elements, viewport, scroll}]
     // 2. window.location.href -> string
     // 3. document.title -> string
-    // 4. injectVslIdsIntoDom() -> undefined
+    // 4. extractIframesInBrowser() -> []
+    // 5. injectVslIdsIntoDom() -> undefined
     mockBrowser.evaluate
       .mockResolvedValueOnce([{ __type: 'extraction_result', elements: mockElements, viewport: { width: 1280, height: 800 }, scroll: { x: 0, y: 0, width: 1280, height: 800 } }] as never)
       .mockResolvedValueOnce('https://current-page.com' as never)
       .mockResolvedValueOnce('Test Page' as never)
+      .mockResolvedValueOnce([] as never)
       .mockResolvedValueOnce(undefined as never);
 
     const result = await handleGetSnapshot({ ttl: 0 }, mockBrowser, mockSession, mockConfig);
@@ -218,10 +220,11 @@ describe('vsl_get_snapshot', () => {
     mockBrowser.navigate.mockResolvedValue(undefined);
     mockBrowser.isAvailable.mockResolvedValue(true);
     // URL задан явно → evaluate для window.location.href пропускается.
-    // 3 вызова: 1. extractDomTree (обёртка), 2. document.title, 3. injectVslIdsIntoDom
+    // 4 вызова: 1. extractDomTree (обёртка), 2. document.title, 3. extractIframesInBrowser, 4. injectVslIdsIntoDom
     mockBrowser.evaluate
       .mockResolvedValueOnce([{ __type: 'extraction_result', elements: mockElements, viewport: { width: 1920, height: 1080 }, scroll: { x: 0, y: 0, width: 1920, height: 1080 } }] as never)
       .mockResolvedValueOnce('Example Page' as never)
+      .mockResolvedValueOnce([] as never)
       .mockResolvedValueOnce(undefined as never);
 
     const result = await handleGetSnapshot(
@@ -281,15 +284,16 @@ describe('vsl_get_snapshot', () => {
       .mockResolvedValueOnce([{ __type: 'extraction_result', elements: mockElements, viewport: { width: 1280, height: 800 }, scroll: { x: 0, y: 0, width: 1280, height: 800 } }] as never)
       .mockResolvedValueOnce('https://test.com' as never)
       .mockResolvedValueOnce('Test Page' as never)
+      .mockResolvedValueOnce([] as never)
       .mockResolvedValueOnce(undefined as never);
 
     const result = await handleGetSnapshot({ ttl: 0 }, mockBrowser, mockSession, mockConfig);
 
     expect(result.status).toBe('success');
 
-    // Проверяем что browser.evaluate вызывался 4 раза
-    // (extractDomTree, url, title, injectVslIdsIntoDom)
-    expect(mockBrowser.evaluate).toHaveBeenCalledTimes(4);
+    // Проверяем что browser.evaluate вызывался 5 раз
+    // (extractDomTree, url, title, extractIframesInBrowser, injectVslIdsIntoDom)
+    expect(mockBrowser.evaluate).toHaveBeenCalledTimes(5);
 
     // Проверяем что результат содержит семантические типы (из SDK segmentTree)
     const vslDoc = result.data as Record<string, unknown>;
@@ -320,12 +324,13 @@ describe('vsl_get_snapshot', () => {
       .mockResolvedValueOnce([{ __type: 'extraction_result', elements: mockElements, viewport: { width: 1280, height: 800 }, scroll: { x: 0, y: 0, width: 1280, height: 800 } }] as never)
       .mockResolvedValueOnce('https://test.com' as never)
       .mockResolvedValueOnce('Test Page' as never)
+      .mockResolvedValueOnce([] as never)
       .mockResolvedValueOnce(undefined as never);
 
     await handleGetSnapshot({ ttl: 0 }, mockBrowser, mockSession, mockConfig);
 
-    // 4-й вызов browser.evaluate — запись ID в DOM (injectVslIdsIntoDom)
-    const injectCall = mockBrowser.evaluate.mock.calls[3];
+    // 5-й вызов browser.evaluate — запись ID в DOM (injectVslIdsIntoDom)
+    const injectCall = mockBrowser.evaluate.mock.calls[4];
     expect(injectCall).toBeDefined();
 
     // Первый аргумент — функция записи
@@ -354,6 +359,7 @@ describe('vsl_get_snapshot', () => {
       .mockResolvedValueOnce([{ __type: 'extraction_result', elements: mockElements, viewport: { width: 1280, height: 800 }, scroll: { x: 0, y: 0, width: 1280, height: 800 } }] as never)
       .mockResolvedValueOnce('https://test.com' as never)
       .mockResolvedValueOnce('Test Page' as never)
+      .mockResolvedValueOnce([] as never)
       .mockResolvedValueOnce(undefined as never);
 
     // Вызываем БЕЗ detail_level — должен использоваться default 'medium'
@@ -389,6 +395,7 @@ describe('vsl_get_snapshot', () => {
       .mockResolvedValueOnce([{ __type: 'extraction_result', elements: mockElements, viewport: { width: 1280, height: 800 }, scroll: { x: 0, y: 0, width: 1280, height: 800 } }] as never)
       .mockResolvedValueOnce('https://test.com' as never)
       .mockResolvedValueOnce('Test Page' as never)
+      .mockResolvedValueOnce([] as never)
       .mockResolvedValueOnce(undefined as never);
 
     // Вызываем С detail_level: 'high' — фильтрация отключена
@@ -418,10 +425,11 @@ describe('vsl_get_snapshot', () => {
 
     mockBrowser.navigate.mockResolvedValue(undefined);
     mockBrowser.isAvailable.mockResolvedValue(true);
-    // URL задан явно → 3 вызова: экстракт-обёртка, title, inject
+    // URL задан явно → 4 вызова: экстракт-обёртка, title, extractIframesInBrowser, inject
     mockBrowser.evaluate
       .mockResolvedValueOnce([{ __type: 'extraction_result', elements: mockElements, viewport: { width: 1280, height: 800 }, scroll: { x: 0, y: 0, width: 1280, height: 800 } }] as never)
       .mockResolvedValueOnce('Cache Test Page' as never)
+      .mockResolvedValueOnce([] as never)
       .mockResolvedValueOnce(undefined as never);
 
     // Первый вызов: заполняет кэш ПОЛНЫМ документом (дефолтный TTL 5s)
@@ -470,6 +478,7 @@ describe('vsl_get_snapshot', () => {
     mockBrowser.evaluate
       .mockResolvedValueOnce([{ __type: 'extraction_result', elements: mockElements, viewport: { width: 1280, height: 800 }, scroll: { x: 0, y: 0, width: 1280, height: 800 } }] as never)
       .mockResolvedValueOnce('Detail Page' as never)
+      .mockResolvedValueOnce([] as never)
       .mockResolvedValueOnce(undefined as never);
 
     // Первый вызов: 'high' — кэш сохраняет полный документ
@@ -513,16 +522,18 @@ describe('vsl_get_snapshot', () => {
     mockSession.snapshotFromElements.mockReturnValue(mockDoc as never);
 
     mockBrowser.isAvailable.mockResolvedValue(true);
-    // Два свежих вызова (ttl: 0 → без кэша), каждый 4 evaluate: обёртка, url, title, inject
+    // Два свежих вызова (ttl: 0 → без кэша), каждый 5 evaluate: обёртка, url, title, extractIframesInBrowser, inject
     const extractionResult = [{ __type: 'extraction_result', elements: mockElements, viewport: { width: 1280, height: 800 }, scroll: { x: 0, y: 0, width: 1280, height: 800 } }] as never;
     mockBrowser.evaluate
       .mockResolvedValueOnce(extractionResult)
       .mockResolvedValueOnce('https://test.com' as never)
       .mockResolvedValueOnce('Test Page' as never)
+      .mockResolvedValueOnce([] as never)
       .mockResolvedValueOnce(undefined as never)
       .mockResolvedValueOnce(extractionResult)
       .mockResolvedValueOnce('https://test.com' as never)
       .mockResolvedValueOnce('Test Page' as never)
+      .mockResolvedValueOnce([] as never)
       .mockResolvedValueOnce(undefined as never);
 
     // Обычный вызов (медиум + вьюпорт): оффскрин-элементы отфильтрованы
@@ -552,10 +563,11 @@ describe('vsl_get_snapshot', () => {
 
     mockBrowser.navigate.mockResolvedValue(undefined);
     mockBrowser.isAvailable.mockResolvedValue(true);
-    // УРЛ задан явно → 3 вызова: обёртка, title, inject
+    // УРЛ задан явно → 4 вызова: обёртка, title, extractIframesInBrowser, inject
     mockBrowser.evaluate
       .mockResolvedValueOnce([{ __type: 'extraction_result', elements: mockElements, viewport: { width: 1280, height: 800 }, scroll: { x: 0, y: 0, width: 1280, height: 800 } }] as never)
       .mockResolvedValueOnce('Full Cache Page' as never)
+      .mockResolvedValueOnce([] as never)
       .mockResolvedValueOnce(undefined as never);
 
     // Первый вызов заполняет кэш (дефолтный TTL 5 секунд)

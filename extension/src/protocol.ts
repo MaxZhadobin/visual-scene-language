@@ -1,9 +1,19 @@
 /**
- * Протокол сообщений extension M1.4 (dc_6, note_1790079041609):
+ * Протокол сообщений extension M1.4 (dc_6, note_1790079041609,
+ * подтверждено пользователем).
+ *
+ * Контракт:
  *  - background → content (вкладка): vsl/snapshot, vsl/execute;
  *  - popup → background (service worker): vsl/start, vsl/stop;
  *  - content → background (vision-ветка T1.5.5): vsl/capture, vsl/classify;
  *  - статусы агентного цикла — chrome.storage.local (ключ AGENT_STATE_KEY).
+ *
+ * Iframe support (M2.1):
+ *  - content script инжектится во все фреймы (all_frames: true в manifest.json);
+ *  - каждый content script отвечает на vsl/snapshot своим локальным snapshot;
+ *  - background агрегирует snapshots из всех фреймов в единый VslDocument;
+ *  - target_id для элементов iframe: frame_{frameId}:{localId};
+ *  - background маршрутизирует vsl/execute по frameId из target_id.
  *
  * Модуль НЕ обращается к chrome API — импортируется content, background, popup
  * и структурными тестами tests/extension (jest/ts-jest компилирует его вместе
@@ -32,9 +42,36 @@ export const MSG_CAPTURE = 'vsl/capture';
 /** content → background: классификация фрагмента через LLM vision API. */
 export const MSG_CLASSIFY = 'vsl/classify';
 
+/** content → background: snapshot из iframe с метаданными фрейма (M2.1). */
+export const MSG_FRAME_SNAPSHOT = 'vsl/frameSnapshot';
+
+/** content → background: rects iframe элементов из parent DOM (M2.1). */
+export const MSG_IFRAME_RECTS = 'vsl/iframeRects';
+
 /** LLM-провайдеры, поддерживаемые адаптерами M1.3 (§9.4). */
 export type LlmProvider = 'openai' | 'anthropic' | 'qwen';
 
+export const MSG_IFRAME_FRAME_IDS = 'vsl/iframeFrameIds';
+
+/**
+ * content → background: запрос frameId по URL iframe (M2.1 rework).
+ * Top frame content script собирает URL iframe элементов и отправляет
+ * в background для получения frameId из frameRegistry.
+ */
+export interface IframeFrameIdsRequest {
+  type: typeof MSG_IFRAME_FRAME_IDS;
+  /** Массив URL iframe элементов из parent DOM. */
+  urls: string[];
+}
+
+/**
+ * background → content: ответ с frameId для каждого URL (M2.1 rework).
+ * Background ищет frameId в frameRegistry по URL и возвращает маппинг.
+ */
+export interface IframeFrameIdsResponse {
+  /** Маппинг URL → frameId. Если frameId не найден — URL отсутствует в маппинге. */
+  frameIds: Record<string, number>;
+}
 /** background → content. */
 export interface SnapshotRequest {
   type: typeof MSG_SNAPSHOT;
@@ -47,6 +84,48 @@ export interface SnapshotResponse {
   snapshot: SnapshotResult;
   /** Данные фрагментов (base64) по vf_id — только при vision=true (DEC-015). */
   fragments?: Record<string, VisualFragmentData>;
+}
+
+/**
+ * content → background: snapshot из iframe с метаданными фрейма (M2.1).
+ * Каждый content script в iframe отправляет это сообщение вместо ответа
+ * на vsl/snapshot — background агрегирует все frame snapshots в единый документ.
+ */
+export interface FrameSnapshotResponse {
+  type: typeof MSG_FRAME_SNAPSHOT;
+  snapshot: SnapshotResult;
+  /** Данные фрагментов (base64) по vf_id — только при vision=true (DEC-015). */
+  fragments?: Record<string, VisualFragmentData>;
+  /** Chrome frameId (0 = top frame, >0 = iframe). */
+  frameId: number;
+  /** URL фрейма (для диагностики и отображения в VSL JSON). */
+  url: string;
+  /** parentFrameId (null для top frame). */
+  parentFrameId: number | null;
+}
+
+/**
+ * content → background: rects iframe элементов из parent DOM (M2.1).
+ * Top frame content script собирает rects всех iframe элементов и отправляет
+ * в background для сопоставления с frame snapshots по URL.
+ * Iframe support (M2.1 rework): также содержит iframeCount для explicit
+ * synchronization mechanism — background ждёт MSG_FRAME_SNAPSHOT от всех фреймов.
+ */
+export interface IframeRectsMessage {
+  type: typeof MSG_IFRAME_RECTS;
+  /** Массив rects iframe элементов с их URL (для сопоставления с frameId). */
+  iframes: Array<{
+    /** URL iframe (iframe.src) — для сопоставления с FrameSnapshotResponse.url. */
+    url: string;
+    /** Абсолютные координаты iframe на parent странице. */
+    rect: { x: number; y: number; width: number; height: number };
+  }>;
+  /** 
+   * Iframe support (M2.1 rework): количество iframe для explicit synchronization.
+   * Background использует это число для countdown — ждёт MSG_FRAME_SNAPSHOT от всех фреймов
+   * перед агрегацией. Если iframeCount === 0, background не ждёт фреймы.
+   */
+  iframeCount: number;
 }
 
 export interface ExecuteRequest {

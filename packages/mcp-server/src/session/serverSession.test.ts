@@ -245,5 +245,157 @@ describe('ServerSession', () => {
       expect(session.getIdMap().size).toBe(0);
       expect(session.getReverseIdMap().size).toBe(0);
     });
+
+    it('reverseIdMap содержит union current + previous объектов (fix: removed IDs)', () => {
+      // Первый snapshot с объектом A
+      const doc1 = {
+        version: '1.0',
+        viewport: { width: 1024, height: 768 },
+        state: { id: 'v1' },
+        objects: [
+          { id: 'button_0_0_0_2_2_0_1_0_1_0_1_0_1_1_0_4', type: 'button', state: 'idle', actions: ['click'], text: 'Кнопка', rect: { x: 0, y: 0, width: 100, height: 40 } },
+        ],
+      } as unknown as VslDocument;
+      session.setSnapshot(doc1);
+
+      // Второй snapshot — объект A удалён, добавлен объект B
+      const doc2 = {
+        version: '1.0',
+        viewport: { width: 1024, height: 768 },
+        state: { id: 'v2' },
+        objects: [
+          { id: 'input_0_0_0_2_2_0_1_0_1_0_1_0_1_1_0_0_1_0_0_0', type: 'input', state: 'idle', actions: ['type'], text: '', rect: { x: 0, y: 50, width: 200, height: 30 } },
+        ],
+      } as unknown as VslDocument;
+      session.setSnapshot(doc2);
+
+      const idMap = session.getIdMap();
+      const reverseIdMap = session.getReverseIdMap();
+
+      // idMap — только из текущего документа (doc2)
+      expect(idMap.size).toBe(1);
+      expect(idMap.get('inp_0')).toBe('input_0_0_0_2_2_0_1_0_1_0_1_0_1_1_0_0_1_0_0_0');
+      // Старый объект НЕ в idMap
+      expect(idMap.has('btn_0')).toBe(false);
+
+      // reverseIdMap — union current + previous
+      expect(reverseIdMap.size).toBe(2);
+      // Текущий объект (из doc2)
+      expect(reverseIdMap.get('input_0_0_0_2_2_0_1_0_1_0_1_0_1_1_0_0_1_0_0_0')).toBe('inp_0');
+      // Previous объект (из doc1) — удалён, но всё ещё в reverseIdMap
+      expect(reverseIdMap.get('button_0_0_0_2_2_0_1_0_1_0_1_0_1_1_0_4')).toBe('btn_0');
+    });
+
+    it('idMap не содержит previous объекты — только reverseIdMap содержит union', () => {
+      const doc1 = {
+        version: '1.0',
+        viewport: { width: 1024, height: 768 },
+        state: { id: 'v1' },
+        objects: [
+          { id: 'div_0_1', type: 'container', state: 'idle', actions: [], text: null, rect: { x: 0, y: 0, width: 300, height: 200 } },
+        ],
+      } as unknown as VslDocument;
+      const doc2 = {
+        version: '1.0',
+        viewport: { width: 1024, height: 768 },
+        state: { id: 'v2' },
+        objects: [
+          { id: 'a_0_1_0', type: 'link', state: 'idle', actions: ['click'], text: 'Link', rect: { x: 0, y: 0, width: 50, height: 20 } },
+        ],
+      } as unknown as VslDocument;
+
+      session.setSnapshot(doc1);
+      session.setSnapshot(doc2);
+
+      // idMap — только current
+      expect(session.getIdMap().size).toBe(1);
+      expect(session.getIdMap().get('a_0')).toBe('a_0_1_0');
+      expect(session.getIdMap().has('div_0')).toBe(false);
+
+      // reverseIdMap — union (current + previous)
+      expect(session.getReverseIdMap().size).toBe(2);
+      expect(session.getReverseIdMap().get('a_0_1_0')).toBe('a_0');
+      expect(session.getReverseIdMap().get('div_0_1')).toBe('div_0');
+    });
+  });
+
+  describe('rebuildIdMaps (iframe fix)', () => {
+    it('перестраивает reverseIdMap после добавления iframe объектов', () => {
+      // 1. Устанавливаем snapshot БЕЗ iframe объектов
+      const doc = {
+        version: '1.0',
+        viewport: { width: 1024, height: 768 },
+        state: { id: 'v1' },
+        objects: [
+          { id: 'button_0_0', type: 'button', state: 'idle', actions: ['click'], text: 'Кнопка', rect: { x: 0, y: 0, width: 100, height: 40 } },
+        ],
+      } as unknown as VslDocument;
+      session.setSnapshot(doc);
+
+      // Проверяем, что iframe элементов НЕТ в reverseIdMap
+      const reverseIdMapBefore = session.getReverseIdMap();
+      expect(reverseIdMapBefore.has('span_0_1')).toBe(false);
+
+      // 2. Добавляем iframe объект с вложенными элементами (эмулируем getSnapshot.ts L598)
+      const currentDoc = session.getSnapshot();
+      currentDoc.objects.push({
+        id: 'iframe_0',
+        t: 'iframe',
+        iframe: {
+          url: 'https://example.com/frame',
+          frameId: 0,
+          vsl: {
+            objects: [
+              { id: 'span_0_1', type: 'span', state: 'idle', actions: [], text: 'Text', rect: { x: 0, y: 0, width: 50, height: 20 } },
+            ],
+          },
+        },
+      } as unknown as VslObject);
+
+      // 3. Вызываем rebuildIdMaps() для перестроения карт
+      session.rebuildIdMaps();
+
+      // 4. Проверяем, что iframe элементы ПОЯВИЛИСЬ в reverseIdMap
+      const reverseIdMapAfter = session.getReverseIdMap();
+      expect(reverseIdMapAfter.has('span_0_1')).toBe(true);
+      expect(reverseIdMapAfter.get('span_0_1')).toBe('iframe_0:spn_0');
+    });
+
+    it('rebuildIdMaps не ломает существующие маппинги', () => {
+      const doc = {
+        version: '1.0',
+        viewport: { width: 1024, height: 768 },
+        state: { id: 'v1' },
+        objects: [
+          { id: 'button_0_0', type: 'button', state: 'idle', actions: ['click'], text: 'Кнопка', rect: { x: 0, y: 0, width: 100, height: 40 } },
+          { id: 'input_0_1', type: 'input', state: 'idle', actions: ['type'], text: '', rect: { x: 0, y: 50, width: 200, height: 30 } },
+        ],
+      } as unknown as VslDocument;
+      session.setSnapshot(doc);
+
+      // Проверяем исходные маппинги
+      expect(session.getReverseIdMap().get('button_0_0')).toBe('btn_0');
+      expect(session.getReverseIdMap().get('input_0_1')).toBe('inp_0');
+
+      // Добавляем iframe объект
+      const currentDoc = session.getSnapshot();
+      currentDoc.objects.push({
+        id: 'iframe_0',
+        t: 'iframe',
+        iframe: {
+          url: 'https://example.com/frame',
+          frameId: 0,
+          vsl: { objects: [] },
+        },
+      } as unknown as VslObject);
+
+      session.rebuildIdMaps();
+
+      // Проверяем, что существующие маппинги НЕ изменились
+      expect(session.getReverseIdMap().get('button_0_0')).toBe('btn_0');
+      expect(session.getReverseIdMap().get('input_0_1')).toBe('inp_0');
+      // Iframe object сам тоже в карте
+      expect(session.getReverseIdMap().get('iframe_0')).toBe('ifr_0');
+    });
   });
 });

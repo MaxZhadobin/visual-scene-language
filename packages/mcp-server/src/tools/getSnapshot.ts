@@ -12,12 +12,12 @@
  *  5. Возврат VSL JSON (полный документ или diff)
  */
 
-import type { BrowserManager } from '../browser/manager.js';
+import type { BrowserManager, PlaywrightFrame } from '../browser/manager.js';
 import type { ServerSession } from '../session/serverSession.js';
 import type { McpServerConfig } from '../config/loader.js';
 import type { VslDocument, VslObject, SnapshotInput, SnapshotResult } from '@thinkingos/vsl-sdk';
 import { isVslDiff } from '@thinkingos/vsl-sdk';
-import { injectVslIdsIntoDom } from '../utils/injectVslIds.js';
+import { injectVslIdsIntoDom, injectVslIdsIntoFrame } from '../utils/injectVslIds.js';
 import { replaceIdsInDocument, replaceIdsInDiff } from '../utils/idMapper.js';
 import { filterDiffByDetailLevel, filterObjectsByDetailLevel, type DetailLevel } from '../utils/detailLevelFilter.js';
 import { computeScrollable, computeVisibleWindow, filterDiffByViewport, filterObjectsByViewport, type ScrollableInfo, type ScrollContext } from '../utils/viewportFilter.js';
@@ -37,6 +37,14 @@ interface SnapshotCacheEntry {
 
 /** Кэш snapshot (ключ: URL; detail_level НЕ входит в ключ — фильтрация на отдаче, АС[5]). */
 const snapshotCache = new Map<string, SnapshotCacheEntry>();
+
+/**
+ * Iframe frame registry: маппинг iframe_N → frame URL.
+ * Заполняется при создании snapshot (getSnapshot) и используется executeAction
+ * для URL-based frame matching вместо index-based (который ломается из-за
+ * разного порядка querySelectorAll vs page.frames()).
+ */
+export const iframeFrameRegistry = new Map<number, string>();
 
 
 /** Аргументы vsl_get_snapshot. */
@@ -266,6 +274,80 @@ export function extractDomTreeInBrowser(): unknown[] {
   }];
 }
 
+/**
+ * Извлекает информацию обо всех iframe элементах на странице.
+ * Выполняется в браузерном контексте через Playwright evaluate().
+ * Возвращает массив объектов с URL и bounding rect каждого iframe.
+ */
+export function extractIframesInBrowser(): unknown[] {
+  interface IframeInfo {
+    url: string;
+    rect: { x: number; y: number; width: number; height: number };
+    name: string;
+    id: string;
+  }
+
+  const iframes: IframeInfo[] = [];
+  const iframeElements = document.querySelectorAll('iframe');
+
+  for (const iframe of Array.from(iframeElements)) {
+    const rect = iframe.getBoundingClientRect();
+    // Пропускаем невидимые iframe (width/height = 0)
+    if (rect.width <= 0 || rect.height <= 0) {
+      continue;
+    }
+
+    // Получаем URL iframe (может быть relative или absolute)
+    let url = iframe.src || '';
+    try {
+      // Преобразуем relative URL в absolute
+      if (url && !url.startsWith('http://') && !url.startsWith('https://')) {
+        url = new URL(url, window.location.href).href;
+      }
+    } catch {
+      // Если не удалось преобразовать — используем как есть
+    }
+
+    iframes.push({
+      url,
+      rect: {
+        x: rect.x + window.scrollX,
+        y: rect.y + window.scrollY,
+        width: rect.width,
+        height: rect.height,
+      },
+      name: iframe.name || '',
+      id: iframe.id || '',
+    });
+  }
+
+  return iframes;
+}
+
+/**
+ * Извлекает DOM-дерево из конкретного iframe через Playwright frame API.
+ * Использует browser.evaluateInFrame() для выполнения extractDomTreeInBrowser()
+ * в контексте iframe (каждый iframe имеет свой window и document).
+ * @param browser - Browser Manager
+ * @param frame - Playwright Frame (из page.frames() или page.frame())
+ * @returns DomExtractionResult с элементами, viewport и scroll iframe
+ */
+export async function extractDomTreeFromFrame(
+  browser: BrowserManager,
+  frame: PlaywrightFrame,
+): Promise<DomExtractionResult> {
+  const extractionResult = await browser.evaluateInFrame(
+    frame as never,
+    extractDomTreeInBrowser,
+  ) as Array<{ __type: string } & DomExtractionResult>;
+
+  const extraction = Array.isArray(extractionResult) ? extractionResult[0] : undefined;
+  if (!extraction || !Array.isArray(extraction.elements)) {
+    throw new Error('Failed to extract DOM tree from iframe: empty result');
+  }
+  return extraction;
+}
+
 /** Развёрнутый результат извлечения DOM в браузере. */
 export interface DomExtractionResult {
   elements: unknown[];
@@ -404,6 +486,77 @@ export async function handleGetSnapshot(
     const url = args.url || (await browser.evaluate(() => window.location.href)) as string;
     const title = await browser.evaluate(() => document.title);
 
+    // 3.5. Iframe support (M2.1): извлекаем iframe элементы и их DOM.
+    //    Для каждого iframe создаём sub-VslDocument и добавляем как iframe-объект.
+    //    Best-effort: если результат не массив (например, в тестах), пропускаем iframe extraction.
+    const iframeElementsRaw = await browser.evaluate(extractIframesInBrowser);
+    const iframeElements = Array.isArray(iframeElementsRaw) ? iframeElementsRaw as Array<{
+      url: string;
+      rect: { x: number; y: number; width: number; height: number };
+      name: string;
+      id: string;
+    }> : [];
+    // Debug logging for iframe extraction
+    if (iframeElements.length > 0) {
+      console.error(`[VSL] Found ${iframeElements.length} iframe elements:`);
+      for (const iframe of iframeElements) {
+        console.error(`  - URL: ${iframe.url}, name: ${iframe.name}, id: ${iframe.id}`);
+      }
+    }
+
+    // Собираем sub-VslDocuments для каждого iframe
+    const iframeSubDocs: Array<{
+      url: string;
+      rect: { x: number; y: number; width: number; height: number };
+      doc: VslDocument;
+      frame: PlaywrightFrame;
+    }> = [];
+    for (const iframeInfo of iframeElements) {
+      if (!iframeInfo.url) continue;
+      try {
+        // Находим Playwright frame по URL с partial match (URL может отличаться из-за редиректов/параметров)
+        const allFrames = await browser.getFrames();
+        const frame = allFrames.find(f => {
+          const frameUrl = f.url();
+          return frameUrl === iframeInfo.url ||
+                 frameUrl.includes(iframeInfo.url) ||
+                 iframeInfo.url.includes(frameUrl);
+        });
+        if (!frame) {
+          console.warn(`[VSL] No Playwright frame found for iframe URL: ${iframeInfo.url}`);
+          console.error(`[VSL] Available frames:`, allFrames.map(f => f.url()));
+          continue;
+        }
+        console.error(`[VSL] ✅ Matched Playwright frame for iframe: ${iframeInfo.url} → ${frame.url()}`);
+
+        // Извлекаем DOM из iframe
+        const iframeExtraction = await extractDomTreeFromFrame(browser, frame);
+        const iframeViewport = iframeExtraction.viewport;
+
+        // Создаём sub-VslDocument для iframe через SDK pipeline
+        const { segmentTree, buildVslDocument } = await import('@thinkingos/vsl-sdk');
+        const segmented = segmentTree(iframeExtraction.elements as never);
+        const iframeDoc = buildVslDocument(segmented, {
+          viewport: iframeViewport,
+          timestamp: new Date().toISOString(),
+          url: iframeInfo.url,
+          title: `iframe: ${iframeInfo.name || iframeInfo.id || iframeInfo.url}`,
+        });
+        iframeSubDocs.push({
+          url: iframeInfo.url,
+          rect: iframeInfo.rect,
+          doc: iframeDoc,
+          frame, // сохраняем PlaywrightFrame для injectVslIdsIntoFrame
+        });
+        // Сохраняем маппинг iframe_N → frame URL для executeAction (URL-based matching)
+        iframeFrameRegistry.set(iframeSubDocs.length - 1, iframeInfo.url);
+        console.error(`[VSL] ✅ Successfully extracted DOM from iframe: ${iframeInfo.url} (${iframeDoc.objects.length} objects)`);
+      } catch (error) {
+        // Best-effort: ошибки iframe не блокируют основной snapshot
+        console.warn(`[VSL] ❌ Failed to extract iframe ${iframeInfo.url}:`, error);
+      }
+    }
+
     // 5. Формируем SnapshotInput и передаём в SDK через ServerSession
     //    (scroll — метаданные скролла для единого пайплайна отдачи, АС[3])
     const input: SnapshotInput = {
@@ -426,13 +579,37 @@ export async function handleGetSnapshot(
       ? session.getSnapshot()
       : result;
 
+    // 7.2. Iframe support (M2.1): добавляем iframe-объекты в основной документ.
+    //    Каждый iframe представляется как VslObject с полем iframe: { url, frameId, vsl }.
+    //    Координаты (p, s) берутся из rect iframe элемента в parent DOM.
+    if (iframeSubDocs.length > 0) {
+      console.error(`[VSL] Adding ${iframeSubDocs.length} iframe objects to snapshot`);
+      const iframeObjects = iframeSubDocs.map((iframeInfo, index) => ({
+        id: `iframe_${index}`,
+        t: 'iframe' as const,
+        p: [iframeInfo.rect.x, iframeInfo.rect.y] as [number, number],
+        s: [iframeInfo.rect.width, iframeInfo.rect.height] as [number, number],
+        iframe: {
+          url: iframeInfo.url,
+          frameId: index,
+          vsl: iframeInfo.doc,
+        },
+      }));
+      currentDoc.objects.push(...iframeObjects);
+      // Перестраиваем reverseIdMap после добавления iframe объектов,
+      // чтобы iframe элементы попали в карту для replaceIdsInDocument()
+      session.rebuildIdMaps();
+      // Inject data-vsl-id into each iframe's DOM for execute_action support (M2.1)
+      for (const iframeInfo of iframeSubDocs) {
+        await injectVslIdsIntoFrame(browser, iframeInfo.frame, iframeInfo.doc.objects);
+      }
+    }
+
     // 7.5. Inject data-vsl-id attributes into DOM for execute_action
     // Shared utility ensures consistent injection across getSnapshot, navigate, executeAction
     await injectVslIdsIntoDom(browser, currentDoc.objects);
-
     // 9. Единый пайплайн отдачи (АС[3]): вьюпорт-фильтр по абсолютным
     //    координатам + скролл-контексту, затем detail_level (DEC-027).
-    //    full=true — полный документ без фильтров (замена удалённого тула vsl_get_full_json).
     const scrollContext = session.getScrollContext();
     const win = computeVisibleWindow(currentDoc.canvas.viewport, scrollContext);
     const scrollable = computeScrollable(currentDoc.canvas.viewport, scrollContext);

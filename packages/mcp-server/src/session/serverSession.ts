@@ -66,11 +66,21 @@ export class ServerSession {
     this.scrollContext = null;
 
     // Строим карты маппинга ID для нового снапшота
-    if (doc.objects) {
-      this.idMap = buildIdMap(doc.objects);
-      this.reverseIdMap = buildReverseIdMap(doc.objects);
+    // idMap (short→long) — только из текущего документа (для резолвинга ID от агента)
+    // reverseIdMap (long→short) — из union current + previous, чтобы removed объекты
+    // из previousDocument тоже получали короткие ID (fix: raw IDs in diff removed/unchanged_refs)
+    const currentObjects = doc.objects ?? [];
+    const previousObjects = this.previousDocument?.objects ?? [];
+    const unionObjects = [...currentObjects, ...previousObjects];
+
+    if (currentObjects.length > 0) {
+      this.idMap = buildIdMap(currentObjects);
     } else {
       this.idMap = new Map();
+    }
+    if (unionObjects.length > 0) {
+      this.reverseIdMap = buildReverseIdMap(unionObjects);
+    } else {
       this.reverseIdMap = new Map();
     }
 
@@ -109,11 +119,21 @@ export class ServerSession {
     this.scrollContext = input.scroll ? { ...input.scroll } : null;
 
     // Строим карты маппинга ID для нового снапшота
-    if (doc.objects) {
-      this.idMap = buildIdMap(doc.objects);
-      this.reverseIdMap = buildReverseIdMap(doc.objects);
+    // idMap (short→long) — только из текущего документа (для резолвинга ID от агента)
+    // reverseIdMap (long→short) — из union current + previous, чтобы removed объекты
+    // из previousDocument тоже получали короткие ID (fix: raw IDs in diff removed/unchanged_refs)
+    const currentObjects = doc.objects ?? [];
+    const previousObjects = this.previousDocument?.objects ?? [];
+    const unionObjects = [...currentObjects, ...previousObjects];
+
+    if (currentObjects.length > 0) {
+      this.idMap = buildIdMap(currentObjects);
     } else {
       this.idMap = new Map();
+    }
+    if (unionObjects.length > 0) {
+      this.reverseIdMap = buildReverseIdMap(unionObjects);
+    } else {
       this.reverseIdMap = new Map();
     }
 
@@ -226,5 +246,33 @@ export class ServerSession {
    */
   getReverseIdMap(): Map<string, string> {
     return this.reverseIdMap;
+  }
+
+  /**
+   * Перестраивает карты маппинга ID (idMap и reverseIdMap) на основе текущего документа.
+   * Используется после добавления iframe объектов в currentDoc.objects,
+   * чтобы reverseIdMap содержал маппинг для iframe элементов.
+   * 
+   * Context: snapshotFromElements() строит карты ДО добавления iframe объектов,
+   * поэтому iframe элементы не попадают в reverseIdMap. Этот метод вызывается
+   * после добавления iframe объектов для перестроения карт.
+   */
+  rebuildIdMaps(): void {
+    if (!this.currentDocument) return;
+
+    const currentObjects = this.currentDocument.objects ?? [];
+    const previousObjects = this.previousDocument?.objects ?? [];
+    const unionObjects = [...currentObjects, ...previousObjects];
+
+    if (currentObjects.length > 0) {
+      this.idMap = buildIdMap(currentObjects);
+    } else {
+      this.idMap = new Map();
+    }
+    if (unionObjects.length > 0) {
+      this.reverseIdMap = buildReverseIdMap(unionObjects);
+    } else {
+      this.reverseIdMap = new Map();
+    }
   }
 }

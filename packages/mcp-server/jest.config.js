@@ -12,13 +12,19 @@ const config = {
   extensionsToTreatAsEsm: ['.ts'],
   moduleNameMapper: {
     '^(\\.{1,2}/.*)\\.js$': '$1',
-    '^@thinkingos/vsl-sdk$': '<rootDir>/../../dist/index.mjs',
+    '^@thinkingos/vsl-sdk$': '<rootDir>/../../src/index.ts',
   },
   transformIgnorePatterns: [
     'node_modules/(?!@thinkingos/vsl-sdk)',
   ],
   transform: {
     '^.+\\.tsx?$': [
+      'ts-jest',
+      {
+        useESM: true,
+      },
+    ],
+    '^.+\\.mjs$': [
       'ts-jest',
       {
         useESM: true,

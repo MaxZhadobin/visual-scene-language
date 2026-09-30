@@ -10,13 +10,15 @@
     {
       "matches": ["<all_urls>"],
       "js": ["dist/content.global.js"],
-      "run_at": "document_idle"
+      "run_at": "document_idle",
+      "all_frames": true
     }
   ],
   "action": {
     "default_popup": "popup.html",
     "default_title": "VSL Agent"
   },
-  "permissions": ["storage"],
-  "host_permissions": ["<all_urls>"]
+  "permissions": ["storage", "webNavigation"],
+  "host_permissions": ["<all_urls>"],
+  "optional_permissions": ["webNavigation"]
 }

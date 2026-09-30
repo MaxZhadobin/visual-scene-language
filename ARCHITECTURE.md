@@ -496,6 +496,98 @@ LLM response:
 4. Подождать изменения экрана (debounce)
 5. Запросить новый VSL-снэпшот → дифф
 
+### 2.6.1 Iframe Support (M2.1)
+
+**Назначение:** поддержка cross-origin iframe через `all_frames: true` + sub-VSL архитектуру.
+
+**Контракт:**
+
+1. **Manifest:** `content_scripts` содержит `"all_frames": true` — content script инжектится во все фреймы (top + iframes).
+
+2. **Content script в iframe:**
+   - Детектит iframe context: `window.top !== window.self`
+   - Отправляет `MSG_FRAME_SNAPSHOT` через `chrome.runtime.sendMessage` (вместо ответа через `sendResponse`)
+   - Snapshot содержит `frameId`, `url`, `parentFrameId`, `snapshot` (локальный VslDocument)
+
+3. **Background aggregation:**
+   - Хранит frame snapshots в `frameRegistry: Map<number, FrameSnapshotResponse>`
+   - Функция `aggregateSnapshotsWithFrames` объединяет top frame snapshot + все iframe snapshots
+   - Iframe представляется как VslObject с `id: iframe_${frameId}`, `t: 'iframe'`, полем `iframe: { url, frameId, vsl: VslDocument }`
+   - Визуальные фрагменты из всех фреймов объединяются в единый `fragments` объект
+
+4. **Target ID формат для iframe элементов:**
+   - Формат: `frame_{frameId}:{localId}` (например, `frame_3:button_0_1`)
+   - Background извлекает frameId через `parseFramePrefix(targetId)`
+   - Маршрутизирует `vsl/execute` в нужный content script по frameId
+
+5. **ID маппинг полностью сохраняется:**
+   - `data-vsl-id` в DOM ↔ `target_id` в VSL JSON
+   - Content script в iframe работает со своим `document.body` как root
+   - `extractDomTree` возвращает ЛЕС потомков iframe's body
+   - Каждый VSL id содержит ≥1 индекс (формат `tag_index1_index2_...`)
+   - `resolveTarget` НЕ меняется — резолвит `localId` через `indexPath` относительно `document.body` iframe
+   - Action executor работает без изменений — только маршрутизация через background
+
+**Типы:**
+
+
+export interface VslIframeData {
+  url: string;        // URL iframe (может отличаться от parent URL)
+  frameId: number;    // Chrome frameId — для маршрутизации execute
+  vsl: VslDocument;   // Sub-VSL документ iframe
+}
+
+export interface VslObject {
+  // ... существующие поля
+  iframe?: VslIframeData;  // присутствует только для iframe-объектов
+}
+
+
+**Ограничения:**
+
+- Координаты iframe-объекта (`p`, `s`) берутся из `rect` iframe элемента в parent DOM
+- Cross-origin iframes: content script работает в isolated world, имеет доступ к DOM iframe
+- Nested iframes: поддерживаются рекурсивно (iframe внутри iframe)
+- Dynamic iframes: регистрируются при первом snapshot, удаляются при исчезновении из DOM
+- Dynamic iframes: регистрируются при первом snapshot, удаляются при исчезновении из DOM
+
+### 2.6.2 MCP Server Iframe Support (Playwright)
+
+**Назначение:** MCP server поддерживает cross-origin iframe через Playwright frame API (без Chrome extension).
+
+**Контракт:**
+
+1. **Snapshot extraction:**
+   - `extractIframesInBrowser()` — запускается через `browser.evaluate()` в контексте страницы, находит все видимые iframe элементы (`document.querySelectorAll('iframe')`), возвращает массив `{ url, rect }` (URL резолвится относительно `window.location.href`, rect — `getBoundingClientRect()`)
+   - `extractDomTreeFromFrame(frame)` — использует `browser.evaluateInFrame(frame, extractDomTreeInBrowser)` для извлечения DOM дерева внутри iframe контекста, возвращает sub-VslDocument
+
+2. **Iframe objects:**
+   - Создаются VslObject с `id: iframe_${frameId}`, `t: 'iframe'`, поле `iframe: { url, frameId, vsl: VslDocument }`
+   - Координаты (p, s) берутся из rect iframe элемента в parent DOM
+
+3. **Target ID формат:**
+   - Формат: `iframe_${frameIndex}:${localId}` (например, `iframe_1:button_0_1`)
+   - `frameIndex` — индекс в `page.frames()` массиве (frames[0] — main frame, поэтому используется `frames[index + 1]`)
+
+4. **Execute routing:**
+   - `executeAction` парсит `iframe_N:localId` через regex `/^iframe_(\d+):(.+)$/`
+   - Получает frames через `browser.getFrames()`
+   - Назначает `targetFrame = frames[frameIndex + 1]` (frames[0] — main frame)
+   - Маршрутизирует действие в нужный frame через `target.locator(selector)` (polymorphic `target = targetFrame || page`)
+
+5. **Frame-aware actions:**
+   - click, fill, upload, select, blur, focus, download — все используют polymorphic `target` variable (`targetFrame || page`)
+   - Select использует `browser.evaluateInFrame(targetFrame, ...)` для DOM манипуляций внутри iframe контекста
+   - Upload использует `target.locator(selector).setInputFiles()` для загрузки файлов в iframe
+
+**Ограничения:**
+
+- Playwright `page.frames()` возвращает все фреймы (frames[0] — main frame), frame index в target_id соответствует `frames[index + 1]`
+- Cross-origin iframes: Playwright имеет доступ к DOM iframe через frame API (в отличие от браузерных ограничений)
+- Nested iframes: поддерживаются через рекурсивный обход frames массива
+
+→ Implementation: [getSnapshot.ts L268-342](./packages/mcp-server/src/tools/getSnapshot.ts), [executeAction.ts L354-375](./packages/mcp-server/src/tools/executeAction.ts)
+
 ### 2.7 HTTP Extractor (M1.6, DEC-024)
 
 **Назначение:** быстрое извлечение структуры статических веб-страниц без браузера (HTTP-first стратегия).

@@ -1,3 +1,18 @@
+
+### 4.7.1 MCP Server Iframe Support (Playwright)
+
+MCP server поддерживает cross-origin iframe через Playwright frame API:
+
+- **Snapshot extraction:** `extractIframesInBrowser()` находит все видимые iframe элементы, возвращает их URLs и bounding rects
+- **DOM extraction:** `extractDomTreeFromFrame(frame)` использует `browser.evaluateInFrame()` для извлечения DOM дерева внутри iframe контекста
+- **Iframe objects:** создаются VslObject с `id: iframe_${frameId}`, `t: 'iframe'`, поле `iframe: { url, frameId, vsl: VslDocument }`
+- **Target ID формат:** `iframe_${frameIndex}:${localId}` (например, `iframe_1:button_0_1`)
+- **Execute routing:** `executeAction` парсит `iframe_N:localId` через regex `/^iframe_(\d+):(.+)$/`, получает frames через `browser.getFrames()`, маршрутизирует действие в нужный frame через `target.locator(selector)`
+- **Frame-aware actions:** click, fill, upload, select, blur, focus, download — все используют polymorphic `target` variable (`targetFrame || page`)
+
+**Ограничения:** Playwright `page.frames()` возвращает все фреймы (frames[0] — main frame), frame index в target_id соответствует `frames[index + 1]`.
+
+→ Implementation: [getSnapshot.ts L268-342](./packages/mcp-server/src/tools/getSnapshot.ts), [executeAction.ts L354-375](./packages/mcp-server/src/tools/executeAction.ts)
 # README_AI.md — Visual Scene Language (VSL)
 
 > **Defensive Publication** | Author: Maxim Zhadobin | Date: 28.05.2025 | Version: v0.2
@@ -267,6 +282,37 @@ VSL ID — уникальный идентификатор элемента в V
 
 **Тестовое покрытие:** Интеграционные тесты (`vslBuilder.test.ts`, `snapshotSession.test.ts`, `snapshot.integration.test.ts`, `cache-diff.integration.test.ts`) покрывают ID генерацию через полный pipeline.
 
+
+### 4.7 Iframe Support (M2.1)
+
+VSL поддерживает cross-origin iframe через `all_frames: true` + sub-VSL архитектуру:
+
+- **Manifest:** `content_scripts` содержит `"all_frames": true` — content script инжектится во все фреймы
+- **Content script в iframe:** детектит `window.top !== window.self`, отправляет `MSG_FRAME_SNAPSHOT` через `chrome.runtime.sendMessage`
+- **Background aggregation:** хранит frame snapshots в `frameRegistry`, объединяет top frame + все iframe snapshots в единый VslDocument
+- **Iframe-объект:** `id: iframe_${frameId}`, `t: 'iframe'`, поле `iframe: { url, frameId, vsl: VslDocument }`
+- **Target ID формат:** `frame_{frameId}:{localId}` (например, `frame_3:button_0_1`)
+- **Execute routing:** background извлекает frameId через `parseFramePrefix(targetId)`, маршрутизирует в нужный content script
+- **ID маппинг сохраняется:** content script в iframe работает со своим `document.body` как root, `resolveTarget` резолвит `localId` через `indexPath` относительно iframe's DOM
+
+**Ограничения:** nested iframes поддерживаются рекурсивно, dynamic iframes регистрируются при первом snapshot, координаты iframe-объекта берутся из rect iframe элемента в parent DOM.
+
+→ Подробнее: [ARCHITECTURE.md §2.6.1](./ARCHITECTURE.md), [DESIGN_SYSTEM.md §3.5](./DESIGN_SYSTEM.md)
+
+### 4.7.1 MCP Server Iframe Support (Playwright)
+
+MCP server поддерживает cross-origin iframe через Playwright frame API:
+
+- **Snapshot extraction:** `extractIframesInBrowser()` находит все видимые iframe элементы, возвращает их URLs и bounding rects
+- **DOM extraction:** `extractDomTreeFromFrame(frame)` использует `browser.evaluateInFrame()` для извлечения DOM дерева внутри iframe контекста
+- **Iframe objects:** создаются VslObject с `id: iframe_${frameId}`, `t: 'iframe'`, поле `iframe: { url, frameId, vsl: VslDocument }`
+- **Target ID формат:** `iframe_${frameIndex}:${localId}` (например, `iframe_1:button_0_1`)
+- **Execute routing:** `executeAction` парсит `iframe_N:localId` через regex `/^iframe_(\d+):(.+)$/`, получает frames через `browser.getFrames()`, маршрутизирует действие в нужный frame через `target.locator(selector)`
+- **Frame-aware actions:** click, fill, upload, select, blur, focus, download — все используют polymorphic `target` variable (`targetFrame || page`)
+
+**Ограничения:** Playwright `page.frames()` возвращает все фреймы (frames[0] — main frame), frame index в target_id соответствует `frames[index + 1]`.
+
+→ Implementation: [getSnapshot.ts L268-342](./packages/mcp-server/src/tools/getSnapshot.ts), [executeAction.ts L354-375](./packages/mcp-server/src/tools/executeAction.ts)
 
 ---
 

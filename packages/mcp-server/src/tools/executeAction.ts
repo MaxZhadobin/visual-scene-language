@@ -19,12 +19,12 @@
  *  изначально прочитанных через HTTP-путь (быстрое чтение структуры).
  */
 
-import type { BrowserManager } from '../browser/manager.js';
+import type { BrowserManager, PlaywrightFrame } from '../browser/manager.js';
 import type { ServerSession } from '../session/serverSession.js';
 import type { SnapshotInput } from '@thinkingos/vsl-sdk';
 
 import { computeToolMetrics } from '../utils/metrics.js';
-import { extractDomTree } from './getSnapshot.js';
+import { extractDomTree, iframeFrameRegistry } from './getSnapshot.js';
 import { injectVslIdsIntoDom } from '../utils/injectVslIds.js';
 import { filterDiffByDetailLevel, filterObjectsByDetailLevel } from '../utils/detailLevelFilter.js';
 import { replaceIdsInDocument, replaceIdsInDiff } from '../utils/idMapper.js';
@@ -352,15 +352,50 @@ export async function handleExecuteAction(
     // Резолв короткого ID в длинный через idMap (rw4_action_integration)
     const idMap = session.getIdMap();
     const resolvedId = idMap.get(args.target_id) || args.target_id;
-    const selector = `[data-vsl-id="${resolvedId}"], #${resolvedId}, .${resolvedId}`;
+
+    // Frame routing: проверяем frame prefix (формат iframe_N:localId)
+    // Если target_id содержит ':', извлекаем frame index и локальный ID
+    let targetFrame: PlaywrightFrame | null = null;
+    let localId = resolvedId;
+    const frameMatch = resolvedId.match(/^iframe_(\d+):(.+)$/);
+    if (frameMatch) {
+      const frameIndex = parseInt(frameMatch[1]!, 10);
+      localId = frameMatch[2]!;
+      // URL-based frame matching: используем iframeFrameRegistry из getSnapshot
+      // вместо index-based (который ломается из-за разного порядка querySelectorAll vs page.frames())
+      const frameUrl = iframeFrameRegistry.get(frameIndex);
+      if (!frameUrl) {
+        return {
+          status: 'error',
+          error: `Frame iframe_${frameIndex} not found in registry. Call vsl_get_snapshot first.`,
+        };
+      }
+      const frames = await browser.getFrames();
+      // Partial URL match (same algorithm as getSnapshot.ts) — handles redirects/parameters
+      targetFrame = frames.find(f => {
+        const u = f.url();
+        return u === frameUrl || u.includes(frameUrl) || frameUrl.includes(u);
+      }) || null;
+      if (!targetFrame) {
+        return {
+          status: 'error',
+          error: `Frame with URL "${frameUrl}" not found. Available frames: ${frames.map(f => f.url()).join(', ')}`,
+        };
+      }
+    }
+
+    const selector = `[data-vsl-id="${localId}"], #${localId}, .${localId}`;
 
     // 5. Выполняем действие
     const page = await browser.getPage();
+    // Frame routing: используем targetFrame если задан, иначе main page
+    // PlaywrightFrame и PlaywrightPage оба поддерживают locator API
+    const target = targetFrame || page;
     
     switch (args.action) {
       case 'click':
-        // Используем Playwright-native click для автоматического ожидания навигации
-        await page.click(selector, { timeout: 5000 });
+        // Используем Playwright locator API для поддержки frame routing
+        await target.locator(selector).click({ timeout: 5000 });
         // Ждём стабилизации DOM после клика
         await page.waitForTimeout(100);
         break;
@@ -373,8 +408,8 @@ export async function handleExecuteAction(
             error: 'value is required for type action',
           };
         }
-        // Используем Playwright-native fill для автоматического ожидания и событий
-        await page.fill(selector, args.value, { timeout: 5000 });
+        // Используем Playwright locator API для поддержки frame routing
+        await target.locator(selector).fill(args.value, { timeout: 5000 });
         break;
 
       case 'scroll': {
@@ -452,34 +487,68 @@ export async function handleExecuteAction(
             error: 'value is required for select action',
           };
         }
-        await browser.evaluate(({ sel, val }: { sel: string; val: string }) => {
-          const el = document.querySelector(sel) as HTMLSelectElement;
-          if (el) el.value = val;
-        }, { sel: selector, val: args.value });
+        // Frame-aware: используем target.evaluate или browser.evaluate
+        if (targetFrame) {
+          await browser.evaluateInFrame(targetFrame, ({ sel, val }: { sel: string; val: string }) => {
+            const el = document.querySelector(sel) as HTMLSelectElement;
+            if (el) el.value = val;
+          }, { sel: selector, val: args.value });
+        } else {
+          await browser.evaluate(({ sel, val }: { sel: string; val: string }) => {
+            const el = document.querySelector(sel) as HTMLSelectElement;
+            if (el) el.value = val;
+          }, { sel: selector, val: args.value });
+        }
         break;
 
       case 'hover':
-        await browser.evaluate((sel: string) => {
-          const el = document.querySelector(sel);
-          if (el) {
-            const event = new MouseEvent('mouseover', { bubbles: true });
-            el.dispatchEvent(event);
-          }
-        }, selector);
+        // Frame-aware hover
+        if (targetFrame) {
+          await browser.evaluateInFrame(targetFrame, (sel: string) => {
+            const el = document.querySelector(sel);
+            if (el) {
+              const event = new MouseEvent('mouseover', { bubbles: true });
+              el.dispatchEvent(event);
+            }
+          }, selector);
+        } else {
+          await browser.evaluate((sel: string) => {
+            const el = document.querySelector(sel);
+            if (el) {
+              const event = new MouseEvent('mouseover', { bubbles: true });
+              el.dispatchEvent(event);
+            }
+          }, selector);
+        }
+        break;
+      case 'blur':
+        // Frame-aware blur
+        if (targetFrame) {
+          await browser.evaluateInFrame(targetFrame, (sel: string) => {
+            const el = document.querySelector(sel) as HTMLElement;
+            if (el) el.blur();
+          }, selector);
+        } else {
+          await browser.evaluate((sel: string) => {
+            const el = document.querySelector(sel) as HTMLElement;
+            if (el) el.blur();
+          }, selector);
+        }
         break;
 
       case 'focus':
-        await browser.evaluate((sel: string) => {
-          const el = document.querySelector(sel) as HTMLElement;
-          if (el) el.focus();
-        }, selector);
-        break;
-
-      case 'blur':
-        await browser.evaluate((sel: string) => {
-          const el = document.querySelector(sel) as HTMLElement;
-          if (el) el.blur();
-        }, selector);
+        // Frame-aware focus
+        if (targetFrame) {
+          await browser.evaluateInFrame(targetFrame, (sel: string) => {
+            const el = document.querySelector(sel) as HTMLElement;
+            if (el) el.focus();
+          }, selector);
+        } else {
+          await browser.evaluate((sel: string) => {
+            const el = document.querySelector(sel) as HTMLElement;
+            if (el) el.focus();
+          }, selector);
+        }
         break;
       case 'press': {
         if (!args.value) {
@@ -500,20 +569,39 @@ export async function handleExecuteAction(
         // иначе — клик по элементу (кнопка/ссылка для скачивания).
         const downloadsBefore = browser.getDownloads();
 
+        // Frame-aware download: используем evaluateInFrame если targetFrame задан
         if (args.value) {
-          await browser.evaluate((url: string) => {
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = '';
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-          }, args.value);
+          if (targetFrame) {
+            await browser.evaluateInFrame(targetFrame, (url: string) => {
+              const a = document.createElement('a');
+              a.href = url;
+              a.download = '';
+              document.body.appendChild(a);
+              a.click();
+              document.body.removeChild(a);
+            }, args.value);
+          } else {
+            await browser.evaluate((url: string) => {
+              const a = document.createElement('a');
+              a.href = url;
+              a.download = '';
+              document.body.appendChild(a);
+              a.click();
+              document.body.removeChild(a);
+            }, args.value);
+          }
         } else {
-          await browser.evaluate((sel: string) => {
-            const el = document.querySelector(sel);
-            if (el) (el as HTMLElement).click();
-          }, selector);
+          if (targetFrame) {
+            await browser.evaluateInFrame(targetFrame, (sel: string) => {
+              const el = document.querySelector(sel);
+              if (el) (el as HTMLElement).click();
+            }, selector);
+          } else {
+            await browser.evaluate((sel: string) => {
+              const el = document.querySelector(sel);
+              if (el) (el as HTMLElement).click();
+            }, selector);
+          }
         }
 
         // Ждём регистрацию загрузки в activeDownloads (context.on('download'))
@@ -590,7 +678,9 @@ export async function handleExecuteAction(
             error: 'value must contain at least one file path',
           };
         }
-        await browser.uploadFile(selector, filePaths);
+        // Frame-aware upload: используем locator API для поддержки iframe
+        // PlaywrightFrame и PlaywrightPage оба поддерживают locator().setInputFiles()
+        await target.locator(selector).setInputFiles(filePaths.length === 1 ? filePaths[0]! : filePaths);
         const result: ExecuteActionResult = {
           status: 'success',
           data: {

@@ -142,7 +142,7 @@ const DEFAULT_LOG_DIR = join(homedir(), '.vsl', 'logs');
 const DEFAULT_LOG_PATH = join(DEFAULT_LOG_DIR, 'security-audit.log');
 
 /** Путь к bundled patterns по умолчанию. */
-const DEFAULT_BUNDLED_PATTERNS_PATH = join(__dirname, '..', '..', 'patterns', 'patterns_v1.json');
+const DEFAULT_BUNDLED_PATTERNS_PATH = join(process.cwd(), 'patterns', 'patterns_v1.json');
 
 /** Путь к remote patterns кэшу по умолчанию. */
 const DEFAULT_REMOTE_PATTERNS_PATH = join(homedir(), '.vsl', 'cache', 'remote-patterns.json');

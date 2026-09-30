@@ -15,6 +15,7 @@ describe('vsl_execute_action', () => {
     fill: jest.Mock;
     waitForTimeout: jest.Mock;
     keyboard: { press: jest.Mock };
+    locator: jest.Mock;
   };
 
   beforeEach(() => {
@@ -23,6 +24,11 @@ describe('vsl_execute_action', () => {
       fill: jest.fn().mockResolvedValue(undefined),
       waitForTimeout: jest.fn().mockResolvedValue(undefined),
       keyboard: { press: jest.fn().mockResolvedValue(undefined) },
+      locator: jest.fn().mockImplementation(() => ({
+        click: jest.fn().mockResolvedValue(undefined),
+        fill: jest.fn().mockResolvedValue(undefined),
+        setInputFiles: jest.fn().mockResolvedValue(undefined),
+      })),
     };
 
     mockBrowser = {
@@ -279,10 +285,16 @@ describe('vsl_execute_action', () => {
     beforeEach(() => {
       mockSession.hasSnapshot.mockReturnValue(true);
       mockSession.getSnapshot.mockReturnValue({
-        canvas: { url: 'https://example.com' },
+        canvas: { url: 'https://example.com', viewport: { width: 1920, height: 1080 } },
+        objects: [],
       } as never);
-      // Дефолт: все evaluate возвращают 'https://example.com'
-      mockBrowser.evaluate.mockResolvedValue('https://example.com' as never);
+      // Дефолт: evaluate возвращает правильный формат для extractDomTree
+      mockBrowser.evaluate.mockResolvedValue([{
+        __type: 'DomExtractionResult',
+        elements: [{ tag: 'div', indexPath: [0], rect: { x: 0, y: 0, width: 100, height: 100 }, text: null, attributes: {}, css: {}, children: [] }],
+        viewport: { width: 1920, height: 1080 },
+        scroll: { x: 0, y: 0 },
+      }] as never);
     });
 
     it('выполняет действие click', async () => {
@@ -311,9 +323,9 @@ describe('vsl_execute_action', () => {
 
       expect(result.status).toBe('success');
       expect(result.data?.target_id).toBe('btn_a3');
-      // Проверяем, что page.click вызван с селектором, содержащим длинный ID
-      expect(mockPage.click).toHaveBeenCalled();
-      const clickSelector = mockPage.click.mock.calls[0][0];
+      // Проверяем, что locator вызван с селектором, содержащим длинный ID
+      expect(mockPage.locator).toHaveBeenCalled();
+      const clickSelector = mockPage.locator.mock.calls[0][0];
       expect(clickSelector).toContain('button_0_0_0_2_2_0_1_0');
       expect(clickSelector).toContain('data-vsl-id');
     });
@@ -633,7 +645,10 @@ describe('vsl_execute_action', () => {
         files: ['/tmp/test.txt'],
         success: true,
       });
-      expect(mockBrowser.uploadFile).toHaveBeenCalled();
+      // Проверяем, что locator().setInputFiles() вызван
+      expect(mockPage.locator).toHaveBeenCalled();
+      const locatorResult = mockPage.locator.mock.results[0].value;
+      expect(locatorResult.setInputFiles).toHaveBeenCalled();
     });
 
     it('выполняет действие upload с несколькими файлами', async () => {
@@ -645,7 +660,10 @@ describe('vsl_execute_action', () => {
 
       expect(result.status).toBe('success');
       expect(result.data?.upload?.files).toEqual(['/tmp/a.txt', '/tmp/b.txt']);
-      expect(mockBrowser.uploadFile).toHaveBeenCalled();
+      // Проверяем, что locator().setInputFiles() вызван с массивом файлов
+      expect(mockPage.locator).toHaveBeenCalled();
+      const locatorResult = mockPage.locator.mock.results[0].value;
+      expect(locatorResult.setInputFiles).toHaveBeenCalledWith(['/tmp/a.txt', '/tmp/b.txt']);
     });
 
     it('возвращает ошибку для upload без value', async () => {
@@ -671,7 +689,12 @@ describe('vsl_execute_action', () => {
     });
 
     it('обрабатывает ошибку uploadFile', async () => {
-      mockBrowser.uploadFile.mockRejectedValueOnce(new Error('Path traversal detected'));
+      // Настраиваем locator().setInputFiles() на выброс ошибки
+      mockPage.locator.mockImplementationOnce(() => ({
+        click: jest.fn().mockResolvedValue(undefined),
+        fill: jest.fn().mockResolvedValue(undefined),
+        setInputFiles: jest.fn().mockRejectedValue(new Error('Path traversal detected')),
+      }));
 
       const result = await handleExecuteAction(
         { action: 'upload', target_id: 'input_0', value: '../../../etc/passwd' },

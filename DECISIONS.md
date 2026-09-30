@@ -446,6 +446,16 @@ DECISIONS.md — это журнал всех архитектурных реш�
 **Последствия:** `packages/mcp-server/src/tools/getSnapshot.ts` реализует viewport culling. README_AI.md §7.6 описывает параметр `include_offscreen`. DEC-024 (vsl_read_page) не затронут — HTTP-путь не имеет координат.
 **Связи:** DEC-024, DEC-006, DEC-010
 
+### DEC-033: Iframe Support — cross-origin iframe через all_frames + sub-VSL архитектура (M2.1)
+
+**Дата:** 2026-09-29
+**Статус:** accepted
+**Контекст:** VSL extension работает только в топ-фрейме (manifest.json не содержит `all_frames: true`). Cross-origin iframe (reCAPTCHA, виджеты, embedded content) недоступны для VSL snapshot и execute. Content script не инжектится в iframe — VSL не видит элементы внутри iframe, action executor не может кликнуть по ним.
+**Решение:** Поддержка cross-origin iframe через sub-VSL архитектуру: (1) manifest.json `content_scripts` содержит `"all_frames": true` — content script инжектится во все фреймы; (2) content script в iframe детектит `window.top !== window.self`, отправляет `MSG_FRAME_SNAPSHOT` через `chrome.runtime.sendMessage`; (3) background хранит frame snapshots в `frameRegistry: Map<number, FrameSnapshotResponse>`, агрегирует top frame + все iframe snapshots в единый VslDocument; (4) iframe представляется как VslObject с `id: iframe_${frameId}`, `t: 'iframe'`, полем `iframe: { url, frameId, vsl: VslDocument }`; (5) target_id для элементов iframe: `frame_{frameId}:{localId}`; (6) background извлекает frameId через `parseFramePrefix(targetId)`, маршрутизирует execute в нужный content script; (7) ID маппинг полностью сохраняется — content script в iframe работает со своим `document.body` как root, `resolveTarget` резолвит `localId` через `indexPath` относительно iframe's DOM.
+**Обоснование:** (1) `all_frames: true` — стандартный механизм Chrome extension для работы с iframe. (2) Sub-VSL архитектура сохраняет семантику VSL — каждый iframe имеет свой VslDocument. (3) Frame-префикс в target_id позволяет маршрутизировать execute без изменения action executor. (4) ID маппинг полностью сохраняется — никаких костылей, флоу такой же полностью, как для обычных элементов. (5) Nested iframes поддерживаются рекурсивно.
+**Последствия:** Extension files обновлены: manifest.json, protocol.ts, content.ts, background.ts. Types: VslIframeData, VslObject.iframe поле. Tests: 10 новых тестов в extension.test.ts покрывают iframe scenarios. Documentation: ARCHITECTURE.md §2.6.1, DESIGN_SYSTEM.md §3.5, README_AI.md §4.7.
+**Связи:** DEC-004, DEC-008, DEC-010, DEC-019, DEC-030
+
 ---
 ## 4. Decision Index
 
@@ -476,6 +486,7 @@ DECISIONS.md — это журнал всех архитектурных реш�
 | DEC-023 | LLM-транспорт — нативный fetch, ноль runtime-зависимостей | accepted | DEC-002, DEC-021, DEC-015 |
 | DEC-024 | vsl_read_page — гибридный MCP-tool чтения веб-страниц (дополнение к web_fetch) | accepted | DEC-019, DEC-006, DEC-010, DEC-001 |
 | DEC-025 | Vision-backend — только LLM vision API (OpenAI/Anthropic/Alibaba Qwen) | accepted | DEC-002, DEC-023, DEC-015 |
+| DEC-033 | Iframe Support — cross-origin iframe через all_frames + sub-VSL архитектура (M2.1) | accepted | DEC-004, DEC-008, DEC-010, DEC-019, DEC-030 |
 | DEC-026 | Lazy Text Loading — оптимизация токенов для контентных страниц (M1.7) | accepted | DEC-006, DEC-015, DEC-019, DEC-024 |
 | DEC-027 | Prompt Injection Filter — защита от инъекций через веб-контент (Phase 7) | accepted | DEC-001, DEC-004, DEC-010 |
 

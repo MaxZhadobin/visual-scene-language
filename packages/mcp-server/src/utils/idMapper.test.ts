@@ -279,4 +279,172 @@ describe('idMapper', () => {
       expect(() => resolveShortIdOrThrow('btn_99', map)).toThrow('Unknown short VSL ID: btn_99');
     });
   });
+
+  describe('iframe support', () => {
+    function makeIframeObj(
+      id: string,
+      frameId: number,
+      iframeObjects: VslObject[]
+    ): VslObject {
+      return {
+        id,
+        t: 'iframe',
+        iframe: {
+          url: `https://example.com/frame-${frameId}`,
+          frameId,
+          vsl: { objects: iframeObjects },
+        },
+      };
+    }
+
+    it('buildIdMap: элементы внутри iframe получают короткие ID с frame prefix', () => {
+      const objects: VslObject[] = [
+        makeObj('div_0'),
+        makeIframeObj('iframe_0', 0, [
+          makeObj('button_0_0'),
+          makeObj('span_0_1'),
+        ]),
+      ];
+
+      const map = buildIdMap(objects);
+
+      // Обычные элементы вне iframe
+      expect(map.get('div_0')).toBe('div_0');
+      // Iframe object сам по себе
+      expect(map.get('ifr_0')).toBe('iframe_0');
+      // Элементы внутри iframe получают frame prefix
+      expect(map.get('iframe_0:btn_0')).toBe('button_0_0');
+      expect(map.get('iframe_0:spn_0')).toBe('span_0_1');
+    });
+
+    it('buildIdMap: вложенные children внутри iframe также получают frame prefix', () => {
+      const objects: VslObject[] = [
+        makeIframeObj('iframe_0', 0, [
+          makeObj('div_0_0', [
+            makeObj('button_0_0_0'),
+            makeObj('a_0_0_1'),
+          ]),
+        ]),
+      ];
+
+      const map = buildIdMap(objects);
+
+      expect(map.get('iframe_0:div_0')).toBe('div_0_0');
+      expect(map.get('iframe_0:btn_0')).toBe('button_0_0_0');
+      expect(map.get('iframe_0:a_0')).toBe('a_0_0_1');
+    });
+
+    it('buildIdMap: несколько iframe получают разные frame prefix', () => {
+      const objects: VslObject[] = [
+        makeIframeObj('iframe_0', 0, [
+          makeObj('button_0_0'),
+        ]),
+        makeIframeObj('iframe_1', 1, [
+          makeObj('button_0_1'),
+        ]),
+      ];
+
+      const map = buildIdMap(objects);
+
+      // Первый iframe: btn счётчик = 0
+      expect(map.get('iframe_0:btn_0')).toBe('button_0_0');
+      // Второй iframe: btn счётчик = 1 (глобальный счётчик продолжается)
+      expect(map.get('iframe_1:btn_1')).toBe('button_0_1');
+      // Убедимся, что iframe_1:btn_0 НЕ существует (счётчик уже был 1)
+      expect(map.has('iframe_1:btn_0')).toBe(false);
+    });
+
+    it('buildIdMap: обычные элементы вне iframe не получают frame prefix', () => {
+      const objects: VslObject[] = [
+        makeObj('button_0'),
+        makeIframeObj('iframe_0', 0, [
+          makeObj('div_0_0'),
+        ]),
+        makeObj('button_1'),
+      ];
+
+      const map = buildIdMap(objects);
+
+      // Обычные элементы без prefix
+      expect(map.get('btn_0')).toBe('button_0');
+      expect(map.get('btn_1')).toBe('button_1');
+      // Iframe элементы с prefix
+      expect(map.get('iframe_0:div_0')).toBe('div_0_0');
+      // Убедимся, что обычные элементы НЕ имеют iframe prefix
+      expect(map.has('iframe_0:btn_0')).toBe(false);
+      expect(map.has('iframe_0:btn_1')).toBe(false);
+    });
+
+    it('buildReverseIdMap: создаёт обратную карту для iframe элементов', () => {
+      const objects: VslObject[] = [
+        makeIframeObj('iframe_0', 0, [
+          makeObj('button_0_0'),
+        ]),
+      ];
+
+      const reverse = buildReverseIdMap(objects);
+
+      expect(reverse.get('button_0_0')).toBe('iframe_0:btn_0');
+    });
+
+    it('replaceIdsInDocument: заменяет ID в iframe.vsl.objects', () => {
+      const objects: VslObject[] = [
+        makeIframeObj('iframe_0', 0, [
+          makeObj('button_0_0'),
+          makeObj('span_0_1'),
+        ]),
+      ];
+
+      const longToShort = buildReverseIdMap(objects);
+      const doc = { objects };
+      const replaced = replaceIdsInDocument(doc, longToShort);
+
+      // Iframe object сам
+      expect(replaced.objects![0]!.id).toBe('ifr_0');
+      // Элементы внутри iframe
+      const iframeVslObjects = replaced.objects![0]!.iframe!.vsl.objects;
+      expect(iframeVslObjects[0]!.id).toBe('iframe_0:btn_0');
+      expect(iframeVslObjects[1]!.id).toBe('iframe_0:spn_0');
+    });
+
+    it('replaceIdsInDocument: не мутирует исходный документ с iframe', () => {
+      const objects: VslObject[] = [
+        makeIframeObj('iframe_0', 0, [
+          makeObj('button_0_0'),
+        ]),
+      ];
+
+      const longToShort = buildReverseIdMap(objects);
+      const doc = { objects };
+
+      replaceIdsInDocument(doc, longToShort);
+
+      // Оригинальные ID не изменены
+      expect(doc.objects[0]!.id).toBe('iframe_0');
+      expect(doc.objects[0]!.iframe!.vsl.objects[0]!.id).toBe('button_0_0');
+    });
+
+    it('replaceIdsInDiff: заменяет ID в added objects с iframe', () => {
+      const objects: VslObject[] = [
+        makeIframeObj('iframe_0', 0, [
+          makeObj('button_0_0'),
+        ]),
+      ];
+      const longToShort = buildReverseIdMap(objects);
+      const diff = {
+        changes: {
+          added: [
+            makeIframeObj('iframe_0', 0, [
+              makeObj('button_0_0'),
+            ]),
+          ],
+        },
+      };
+
+      const replaced = replaceIdsInDiff(diff, longToShort);
+
+      expect(replaced.changes!.added![0]!.id).toBe('ifr_0');
+      expect(replaced.changes!.added![0]!.iframe!.vsl.objects[0]!.id).toBe('iframe_0:btn_0');
+    });
+  });
 });

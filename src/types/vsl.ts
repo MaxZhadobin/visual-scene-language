@@ -36,6 +36,8 @@ export type VslType =
   | 'icon'
   | 'chart'
   | 'custom_widget'
+  // Level 6 — iframe support (M2.1):
+  | 'iframe'
   | 'unknown';
 
 /** Состояние объекта VSL (поле `st`) — из ARIA-атрибутов (T1.1.4). */
@@ -118,6 +120,21 @@ export interface VslCanvas {
   title?: string;
 }
 
+/**
+ * Iframe support (M2.1): метаданные iframe-объекта.
+ * Еслиrame представляется как обычный VslObject с полем iframe,
+ * содержащим sub-VSL документ этого фрейма.
+ */
+export interface VslIframeData {
+  /** URL iframe (может отличаться от parent URL). */
+  url: string;
+  /** Chrome frameId — для маршрутизации execute actions. */
+  frameId: number;
+  /** Sub-VSL документ iframe — полный VslDocument со своими объектами. */
+  vsl: VslDocument;
+}
+
+
 export interface VslObject {
   /** Детерминированный ID из DOM-пути (note_1789916091535, база M1.2 diff). */
   id: string;
@@ -148,6 +165,8 @@ export interface VslObject {
   multiple?: boolean;
   /** Атрибут aria-haspopup — указывает на dropdown/menu (для LLM). */
   hasPopup?: string;
+  /** Iframe support (M2.1): метаданные iframe, если это iframe-объект. */
+  iframe?: VslIframeData;
 }
 
 export interface VslDocument {

@@ -58,6 +58,7 @@ describe('isContainerType', () => {
     expect(isContainerType('header')).toBe(true);
     expect(isContainerType('main')).toBe(true);
     expect(isContainerType('footer')).toBe(true);
+    expect(isContainerType('iframe')).toBe(true);
   });
 
   it('возвращает false для неконтейнерных типов', () => {
@@ -92,7 +93,7 @@ describe('INTERACTIVE_TYPES', () => {
 
 describe('CONTAINER_TYPES', () => {
   it('содержит все контейнерные типы', () => {
-    expect(CONTAINER_TYPES.size).toBe(12);
+    expect(CONTAINER_TYPES.size).toBe(13);
     expect(CONTAINER_TYPES.has('container')).toBe(true);
     expect(CONTAINER_TYPES.has('scrollable_container')).toBe(true);
     expect(CONTAINER_TYPES.has('layout')).toBe(true);
@@ -105,8 +106,8 @@ describe('CONTAINER_TYPES', () => {
     expect(CONTAINER_TYPES.has('header')).toBe(true);
     expect(CONTAINER_TYPES.has('main')).toBe(true);
     expect(CONTAINER_TYPES.has('footer')).toBe(true);
+    expect(CONTAINER_TYPES.has('iframe')).toBe(true);
   });
-
   it('не содержит HTML-теги', () => {
     expect(CONTAINER_TYPES.has('div')).toBe(false);
     expect(CONTAINER_TYPES.has('section')).toBe(false);

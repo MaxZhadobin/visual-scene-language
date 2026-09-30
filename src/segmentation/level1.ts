@@ -23,6 +23,9 @@ export const LEVEL1_TAG_MAP: Readonly<Record<string, VslType>> = {
   img: 'image',
   select: 'select',
   textarea: 'textarea',
+  // Note: iframe elements are NOT classified here — they are handled by
+  // background aggregation (aggregateSnapshotsWithFrames) which creates
+  // iframe objects with sub-VSL documents from frameRegistry.
 };
 
 /**
