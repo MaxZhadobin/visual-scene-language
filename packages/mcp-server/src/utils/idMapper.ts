@@ -85,42 +85,79 @@ function toBase36(n: number): string {
 /**
  * Построить карту shortId → longId для всех объектов в дереве.
  * Обходит рекурсивно все объекты и их потомков (ch).
+ *
+ * @param objects - Объекты для маппинга
+ * @param previousReverseIdMap - Опциональная карта longId → shortId из предыдущего snapshot.
+ *   Используется для сохранения стабильности ID: если элемент с тем же longId существовал
+ *   в предыдущем snapshot, ему назначается тот же shortId (fix: ID reassignment после fill).
  */
-export function buildIdMap(objects: readonly VslObject[]): Map<string, string> {
+export function buildIdMap(
+  objects: readonly VslObject[],
+  previousReverseIdMap?: Map<string, string>
+): Map<string, string> {
   const map = new Map<string, string>();
   const counters = new Map<string, number>(); // prefix → next counter
+  const assignedShortIds = new Set<string>(); // ID, назначенные в текущем проходе
 
-  function visit(obj: VslObject, framePrefix?: string): void {
-    const tag = extractTag(obj.id);
-    const prefix = tagPrefix(tag);
-    const counter = counters.get(prefix) ?? 0;
-    counters.set(prefix, counter + 1);
+  // Первый проход: собираем все элементы и их framePrefix
+  const elementsWithPrefix: Array<{ obj: VslObject; framePrefix?: string }> = [];
 
-    // Формируем shortId с frame prefix если внутри iframe
-    const shortId = framePrefix 
-      ? `${framePrefix}:${prefix}_${toBase36(counter)}`
-      : `${prefix}_${toBase36(counter)}`;
-    map.set(shortId, obj.id);
-
-    // Рекурсия для children
+  function collect(obj: VslObject, framePrefix?: string): void {
+    elementsWithPrefix.push({ obj, framePrefix });
     if (obj.ch) {
       for (const child of obj.ch) {
-        visit(child, framePrefix);
+        collect(child, framePrefix);
       }
     }
-
-    // Рекурсия для iframe.vsl.objects с frame prefix
     if (obj.iframe?.vsl?.objects) {
       const frameIndex = obj.iframe.frameId;
       const iframeFramePrefix = `iframe_${frameIndex}`;
       for (const iframeObj of obj.iframe.vsl.objects) {
-        visit(iframeObj, iframeFramePrefix);
+        collect(iframeObj, iframeFramePrefix);
       }
     }
   }
 
   for (const obj of objects) {
-    visit(obj);
+    collect(obj);
+  }
+
+  // Второй проход: сначала назначаем ID элементам из previousReverseIdMap
+  if (previousReverseIdMap) {
+    for (const { obj, framePrefix } of elementsWithPrefix) {
+      const oldShortId = previousReverseIdMap.get(obj.id);
+      if (oldShortId && !assignedShortIds.has(oldShortId)) {
+        // Проверяем что oldShortId имеет правильный framePrefix
+        const expectedPrefix = framePrefix ? `${framePrefix}:` : '';
+        if (oldShortId.startsWith(expectedPrefix) || (!framePrefix && !oldShortId.includes(':'))) {
+          map.set(oldShortId, obj.id);
+          assignedShortIds.add(oldShortId);
+        }
+      }
+    }
+  }
+
+  // Третий проход: назначаем ID остальным элементам
+  for (const { obj, framePrefix } of elementsWithPrefix) {
+    if (map.has(framePrefix ? `${framePrefix}:${obj.id}` : obj.id)) continue; // уже назначен
+    // Проверяем, есть ли этот элемент в map (по longId)
+    const alreadyAssigned = Array.from(map.entries()).some(([_, longId]) => longId === obj.id);
+    if (alreadyAssigned) continue;
+
+    const tag = extractTag(obj.id);
+    const prefix = tagPrefix(tag);
+    let counter = counters.get(prefix) ?? 0;
+    let shortId: string;
+    do {
+      shortId = framePrefix 
+        ? `${framePrefix}:${prefix}_${toBase36(counter)}`
+        : `${prefix}_${toBase36(counter)}`;
+      counter++;
+    } while (assignedShortIds.has(shortId));
+
+    counters.set(prefix, counter);
+    assignedShortIds.add(shortId);
+    map.set(shortId, obj.id);
   }
 
   return map;
@@ -128,9 +165,15 @@ export function buildIdMap(objects: readonly VslObject[]): Map<string, string> {
 
 /**
  * Построить обратную карту longId → shortId.
+ *
+ * @param objects - Объекты для маппинга
+ * @param previousReverseIdMap - Опциональная карта из предыдущего snapshot для стабильности ID.
  */
-export function buildReverseIdMap(objects: readonly VslObject[]): Map<string, string> {
-  const forward = buildIdMap(objects);
+export function buildReverseIdMap(
+  objects: readonly VslObject[],
+  previousReverseIdMap?: Map<string, string>
+): Map<string, string> {
+  const forward = buildIdMap(objects, previousReverseIdMap);
   const reverse = new Map<string, string>();
   for (const [shortId, longId] of forward) {
     reverse.set(longId, shortId);

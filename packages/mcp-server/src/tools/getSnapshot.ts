@@ -17,7 +17,7 @@ import type { ServerSession } from '../session/serverSession.js';
 import type { McpServerConfig } from '../config/loader.js';
 import type { VslDocument, VslObject, SnapshotInput, SnapshotResult } from '@thinkingos/vsl-sdk';
 import { isVslDiff } from '@thinkingos/vsl-sdk';
-import { injectVslIdsIntoDom, injectVslIdsIntoFrame } from '../utils/injectVslIds.js';
+import { injectVslIdsIntoDom, injectVslIdsIntoFrame, type SemanticMap, type SemanticAttributes } from '../utils/injectVslIds.js';
 import { replaceIdsInDocument, replaceIdsInDiff } from '../utils/idMapper.js';
 import { filterDiffByDetailLevel, filterObjectsByDetailLevel, type DetailLevel } from '../utils/detailLevelFilter.js';
 import { computeScrollable, computeVisibleWindow, filterDiffByViewport, filterObjectsByViewport, type ScrollableInfo, type ScrollContext } from '../utils/viewportFilter.js';
@@ -114,6 +114,51 @@ function countObjects(objects: VslObject[]): number {
 }
 
 /**
+ * Build semantic map from extracted elements for fallback selectors.
+ * Maps indexPath (e.g., '0_2_1') to semantic attributes (role, aria-label, aria-labelledby).
+ * Used by injectVslIds when indexPath navigation fails (reCAPTCHA, hCaptcha support).
+ */
+function buildSemanticMap(elements: unknown[]): SemanticMap {
+  const map: SemanticMap = new Map();
+  
+  function visit(el: unknown): void {
+    const elem = el as {
+      indexPath?: number[];
+      role?: string;
+      ariaLabel?: string;
+      ariaLabelledBy?: string;
+      children?: unknown[];
+    };
+    
+    if (!elem.indexPath) return;
+    
+    // Only store if at least one semantic attribute is present
+    if (elem.role || elem.ariaLabel || elem.ariaLabelledBy) {
+      const key = elem.indexPath.join('_');
+      const semantic: SemanticAttributes = {};
+      if (elem.role) semantic.role = elem.role;
+      if (elem.ariaLabel) semantic.ariaLabel = elem.ariaLabel;
+      if (elem.ariaLabelledBy) semantic.ariaLabelledBy = elem.ariaLabelledBy;
+      map.set(key, semantic);
+    }
+    
+    // Recurse into children
+    if (elem.children && Array.isArray(elem.children)) {
+      for (const child of elem.children) {
+        visit(child);
+      }
+    }
+  }
+  
+  for (const el of elements) {
+    visit(el);
+  }
+  
+  return map;
+}
+
+
+/**
  * Извлекает DOM-дерево в формате ExtractedElement[] (SDK-совместимый).
  * Выполняется в браузерном контексте через Playwright evaluate().
  * Экспортируется для использования в других tools (executeAction с return_state).
@@ -131,6 +176,10 @@ export function extractDomTreeInBrowser(): unknown[] {
   interface ExtractedElement {
     tag: string; indexPath: number[]; rect: Rect; text: string | null;
     attributes: Record<string, string>; css?: ElementCss; children: ExtractedElement[];
+    // Semantic attributes for fallback selectors (reCAPTCHA, hCaptcha, dynamic iframes)
+    role?: string;
+    ariaLabel?: string;
+    ariaLabelledBy?: string;
   }
 
   const NON_RENDERABLE_TAGS = new Set([
@@ -251,6 +300,10 @@ export function extractDomTreeInBrowser(): unknown[] {
         attributes,
         css,
         children,
+        // Semantic attributes for fallback selectors
+        role: attributes['role'],
+        ariaLabel: attributes['aria-label'],
+        ariaLabelledBy: attributes['aria-labelledby'],
       });
     });
     return result;
@@ -486,6 +539,11 @@ export async function handleGetSnapshot(
     const url = args.url || (await browser.evaluate(() => window.location.href)) as string;
     const title = await browser.evaluate(() => document.title);
 
+    // 3.1. Build semantic map for fallback selectors (reCAPTCHA, hCaptcha support)
+    //    Maps indexPath → semantic attributes (role, aria-label, aria-labelledby)
+    //    Used by injectVslIds when indexPath navigation fails
+    const semanticMap = buildSemanticMap(extractedElements);
+
     // 3.5. Iframe support (M2.1): извлекаем iframe элементы и их DOM.
     //    Для каждого iframe создаём sub-VslDocument и добавляем как iframe-объект.
     //    Best-effort: если результат не массив (например, в тестах), пропускаем iframe extraction.
@@ -601,13 +659,13 @@ export async function handleGetSnapshot(
       session.rebuildIdMaps();
       // Inject data-vsl-id into each iframe's DOM for execute_action support (M2.1)
       for (const iframeInfo of iframeSubDocs) {
-        await injectVslIdsIntoFrame(browser, iframeInfo.frame, iframeInfo.doc.objects);
+        await injectVslIdsIntoFrame(browser, iframeInfo.frame, iframeInfo.doc.objects, semanticMap);
       }
     }
 
     // 7.5. Inject data-vsl-id attributes into DOM for execute_action
     // Shared utility ensures consistent injection across getSnapshot, navigate, executeAction
-    await injectVslIdsIntoDom(browser, currentDoc.objects);
+    await injectVslIdsIntoDom(browser, currentDoc.objects, semanticMap);
     // 9. Единый пайплайн отдачи (АС[3]): вьюпорт-фильтр по абсолютным
     //    координатам + скролл-контексту, затем detail_level (DEC-027).
     const scrollContext = session.getScrollContext();

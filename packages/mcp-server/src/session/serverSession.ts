@@ -118,6 +118,9 @@ export class ServerSession {
     // Сохраняем метаданные скролла для единого пайплайна отдачи (АС[3])
     this.scrollContext = input.scroll ? { ...input.scroll } : null;
 
+    // Сохраняем предыдущий reverseIdMap для стабильности ID (fix: ID reassignment после fill)
+    const prevReverseIdMap = this.reverseIdMap;
+
     // Строим карты маппинга ID для нового снапшота
     // idMap (short→long) — только из текущего документа (для резолвинга ID от агента)
     // reverseIdMap (long→short) — из union current + previous, чтобы removed объекты
@@ -127,12 +130,12 @@ export class ServerSession {
     const unionObjects = [...currentObjects, ...previousObjects];
 
     if (currentObjects.length > 0) {
-      this.idMap = buildIdMap(currentObjects);
+      this.idMap = buildIdMap(currentObjects, prevReverseIdMap);
     } else {
       this.idMap = new Map();
     }
     if (unionObjects.length > 0) {
-      this.reverseIdMap = buildReverseIdMap(unionObjects);
+      this.reverseIdMap = buildReverseIdMap(unionObjects, prevReverseIdMap);
     } else {
       this.reverseIdMap = new Map();
     }

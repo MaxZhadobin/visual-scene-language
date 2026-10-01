@@ -347,6 +347,16 @@ Agent: vsl_get_snapshot(full=true)
 │  ├── Diff Engine → VslDiff                  │
 │  └── Vision Classifier (LLM flash models)   │
 └─────────────────────────────────────────────┘
+## Исправления (Bug Fixes)
+
+> **ID Stability после fill action** — элементы сохраняют свои короткие ID после изменений DOM.
+
+> **Iframe ID Resolution** — исправлен резолв ID для элементов внутри iframe (используется полный `target_id` с префиксом `iframe_N:`).
+
+> **Lazy Text Loading** — тексты длиннее ~200 символов автоматически заменяются на `txt_preview` + `txt_ref` для экономии токенов.
+
+> **Lazy Navigation** — автоматическая навигация на URL перед выполнением действий, если браузер не на нужной странице.
+
 ## Требования
 
 - Node.js ≥ 18

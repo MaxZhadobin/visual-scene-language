@@ -349,20 +349,15 @@ export async function handleExecuteAction(
       session.snapshotFromElements(extraction.elements, input);
     }
 
-    // Резолв короткого ID в длинный через idMap (rw4_action_integration)
-    const idMap = session.getIdMap();
-    const resolvedId = idMap.get(args.target_id) || args.target_id;
-
-    // Frame routing: проверяем frame prefix (формат iframe_N:localId)
-    // Если target_id содержит ':', извлекаем frame index и локальный ID
+    // Frame routing: проверяем frame prefix (формат iframe_N:localId) В args.target_id
+    // ВАЖНО: проверяем prefix ДО резолва ID, потому что idMap содержит ключи с префиксом
     let targetFrame: PlaywrightFrame | null = null;
-    let localId = resolvedId;
-    const frameMatch = resolvedId.match(/^iframe_(\d+):(.+)$/);
+    let localShortId = args.target_id;
+    const frameMatch = args.target_id.match(/^iframe_(\d+):(.+)$/);
     if (frameMatch) {
       const frameIndex = parseInt(frameMatch[1]!, 10);
-      localId = frameMatch[2]!;
+      localShortId = frameMatch[2]!;
       // URL-based frame matching: используем iframeFrameRegistry из getSnapshot
-      // вместо index-based (который ломается из-за разного порядка querySelectorAll vs page.frames())
       const frameUrl = iframeFrameRegistry.get(frameIndex);
       if (!frameUrl) {
         return {
@@ -384,8 +379,14 @@ export async function handleExecuteAction(
       }
     }
 
-    const selector = `[data-vsl-id="${localId}"], #${localId}, .${localId}`;
+    // Резолв короткого ID в длинный через idMap (rw4_action_integration)
+    // Для iframe элементов используем ПОЛНЫЙ target_id (с префиксом iframe_N:),
+    // потому что idMap хранит ключи с префиксом (iframe_0:spn_0 → span_0_0_0)
+    const idMap = session.getIdMap();
+    const resolvedId = idMap.get(args.target_id) || localShortId;
+    const localId = resolvedId;
 
+    const selector = `[data-vsl-id="${localId}"], #${localId}, .${localId}`;
     // 5. Выполняем действие
     const page = await browser.getPage();
     // Frame routing: используем targetFrame если задан, иначе main page
@@ -393,12 +394,73 @@ export async function handleExecuteAction(
     const target = targetFrame || page;
     
     switch (args.action) {
-      case 'click':
-        // Используем Playwright locator API для поддержки frame routing
-        await target.locator(selector).click({ timeout: 5000 });
+      case 'click': {
+        // Positional mapping fallback (reCAPTCHA 3x3 grid support):
+        // 1. Try standard locator (data-vsl-id, #id, .class)
+        // 2. If fails → find element in snapshot by ID, get rect
+        // 3. Use elementFromPoint at rect center to find actual DOM element
+        // 4. Click the found element
+        try {
+          // Strategy 1: Standard locator
+          await target.locator(selector).click({ timeout: 5000 });
+        } catch (locatorError) {
+          // Strategy 2: Positional mapping fallback
+          console.warn(`[VSL] Standard locator failed for ${args.target_id}, trying positional mapping fallback`);
+          
+          // Find element in snapshot by ID
+          const snapshotDoc = session.getSnapshot();
+          const snapshotObjects = snapshotDoc.objects ?? [];
+          
+          // Recursive search for element by ID
+          function findObjectById(objects: unknown[], targetId: string): unknown | null {
+            for (const obj of objects) {
+              const o = obj as { id?: string; rect?: { x: number; y: number; width: number; height: number }; ch?: unknown[] };
+              if (o.id === targetId) return o;
+              if (o.ch && Array.isArray(o.ch)) {
+                const found = findObjectById(o.ch, targetId);
+                if (found) return found;
+              }
+            }
+            return null;
+          }
+          
+          const snapshotObj = findObjectById(snapshotObjects, localId) as { rect?: { x: number; y: number; width: number; height: number } } | null;
+          
+          if (!snapshotObj || !snapshotObj.rect) {
+            console.error(`[VSL] Positional mapping failed: element ${localId} not found in snapshot or has no rect`);
+            throw locatorError; // Re-throw original error
+          }
+          
+          const rect = snapshotObj.rect;
+          const centerX = rect.x + rect.width / 2;
+          const centerY = rect.y + rect.height / 2;
+          
+          // Use elementFromPoint to find actual DOM element at rect center
+          const elementFound = await target.evaluate(
+            ([x, y]) => {
+              const el = document.elementFromPoint(x, y);
+              if (el) {
+                (el as HTMLElement).click();
+                return true;
+              }
+              return false;
+            },
+            [centerX, centerY] as [number, number]
+          );
+          
+          if (!elementFound) {
+            console.error(`[VSL] Positional mapping failed: no element found at (${centerX}, ${centerY})`);
+            throw locatorError; // Re-throw original error
+          }
+          
+          console.log(`[VSL] Positional mapping succeeded: clicked element at (${centerX}, ${centerY}) for ${args.target_id}`);
+        }
+        
         // Ждём стабилизации DOM после клика
         await page.waitForTimeout(100);
         break;
+      }
+
 
       case 'fill':
       case 'type':
