@@ -73,6 +73,7 @@ export async function handleGetVisual(
   args: GetVisualArgs,
   browser: BrowserManager,
   session?: ServerSession,
+  sessionId?: string,
   ): Promise<GetVisualResult | GetVisualErrorResult> {
   const startTime = Date.now();
 
@@ -114,7 +115,7 @@ export async function handleGetVisual(
 
     // 3. Special case: root_0 — screenshot entire page
     if (args.element_id === 'root_0') {
-      const page = await browser.getPage();
+      const page = await browser.getPage(sessionId!);
       const screenshotBuffer = await page.screenshot({ type: 'png', fullPage: false });
       const base64Image = screenshotBuffer.toString('base64');
       const result: GetVisualResult = {
@@ -137,17 +138,17 @@ export async function handleGetVisual(
     // Проверяем, что элемент существует
     let elementExists = await browser.evaluate((sel: string) => {
       return document.querySelector(sel) !== null;
-    }, selector);
+    }, sessionId!, selector);
 
     // Auto-refresh: если элемент не найден и auto_refresh=true, обновляем snapshot
     if (!elementExists && args.auto_refresh && session) {
       // Вызываем handleGetSnapshot для обновления DOM и data-vsl-id атрибутов
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await handleGetSnapshot({}, browser, session, { downloadsPath: '' } as any);
+      await handleGetSnapshot({}, browser, session, { downloadsPath: '' } as any, sessionId!);
       // Повторно проверяем наличие элемента
       elementExists = await browser.evaluate((sel: string) => {
         return document.querySelector(sel) !== null;
-      }, selector);
+      }, sessionId!, selector);
     }
 
     if (!elementExists) {
@@ -171,7 +172,7 @@ export async function handleGetVisual(
 
     // Делаем скриншот элемента
     //    Playwright Page.screenshot() с clip для элемента
-    const page = await browser.getPage();
+    const page = await browser.getPage(sessionId!);
 
     // Auto-scroll: проверяем видимость элемента и прокручиваем к нему если нужно
     // auto_scroll default = true (обратно-совместимо: старое поведение без скролла при auto_scroll: false)
@@ -203,7 +204,7 @@ export async function handleGetVisual(
         // Скроллим к элементу
         el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
         return { needsScroll: true, scrolled: true };
-      }, selector);
+      }, sessionId!, selector);
 
       if (scrollResult.scrolled) {
         scrolled = true;
@@ -216,11 +217,11 @@ export async function handleGetVisual(
               });
             });
           });
-        });
+        }, sessionId!);
         // Получаем новый scroll offset
         scrollOffset = await browser.evaluate(() => {
           return { x: window.scrollX, y: window.scrollY };
-        });
+        }, sessionId!);
       }
     }
 
@@ -236,7 +237,7 @@ export async function handleGetVisual(
         width: r.width,
         height: r.height
       };
-    }, selector);
+    }, sessionId!, selector);
 
     if (!rect) {
       return {

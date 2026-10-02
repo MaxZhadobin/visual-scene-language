@@ -26,6 +26,7 @@ import { handleExecuteAction } from './executeAction.js';
 import { handleGetVisual } from './getVisual.js';
 import { handleReadPage } from './readPage.js';
 import { handleGetTextBlock } from './getTextBlock.js';
+import { handleClickCoordinates } from './clickCoordinates.js';
 
 /** Список всех инструментов VSL. */
 const VSL_TOOLS = [
@@ -113,7 +114,7 @@ const VSL_TOOLS = [
   },
   {
     name: 'vsl_get_visual',
-    description: 'Получить visual fragment (скриншот) элемента в формате base64 WebP. Используйте для элементов, которые сложно классифицировать по тексту (иконки, графики, кастомные виджеты). Возвращает {mediaType:image/webp, data:base64data}. Пример: {element_id: img_5}. Параметр auto_refresh=true автоматически обновляет snapshot перед поиском элемента.',
+    description: 'Получить visual fragment (скриншот) элемента в формате base64 WebP. Используйте для элементов, которые сложно классифицировать по тексту (иконки, графики, кастомные виджеты). Возвращает {mediaType:image/webp, data:base64data}. Пример: {element_id: img_5}. Параметр auto_refresh=true автоматически обновляет snapshot перед поиском элемента. ВАЖНО: работает только с ID из vsl_get_snapshot (browser DOM). НЕ работает с ID из vsl_read_page (semantic IDs) — используйте vsl_get_snapshot для получения совместимых ID.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -161,6 +162,37 @@ const VSL_TOOLS = [
       required: ['block_id'],
     },
   },
+  {
+    name: 'vsl_click_coordinates',
+    description: 'Выполнить множественные клики по координатам относительно целевого элемента. Координаты (x, y) задаются в пикселях от левого верхнего угла элемента (используйте bbox из snapshot). Поддерживает задержки между кликами. Возвращает diff + snapshot + screenshot после всех кликов. Пример: {target_id: "iframe_2", clicks: [{x: 50, y: 50, delay_after_ms: 500}, {x: 150, y: 50}]}.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        target_id: {
+          type: 'string',
+          description: 'ID элемента в VSL JSON (например, iframe_2 для reCAPTCHA challenge iframe)',
+        },
+        clicks: {
+          type: 'array',
+          description: 'Массив кликов. Каждый клик: {x: number, y: number, delay_after_ms?: number}. Координаты в пикселях от левого верхнего угла элемента.',
+          items: {
+            type: 'object',
+            properties: {
+              x: { type: 'number', description: 'X координата (pixels от левого края элемента)' },
+              y: { type: 'number', description: 'Y координата (pixels от верхнего края элемента)' },
+              delay_after_ms: { type: 'number', description: 'Задержка после клика (мс)' },
+            },
+            required: ['x', 'y'],
+          },
+        },
+        return_state: {
+          type: 'boolean',
+          description: 'Если true (default), возвращает diff + snapshot + screenshot после всех кликов.',
+        },
+      },
+      required: ['target_id', 'clicks'],
+    },
+  },
 ];
 
 /**
@@ -184,23 +216,23 @@ export function registerTools(server: Server, config: McpServerConfig, sessionMa
 
     // Per-session isolation: извлекаем sessionId из _meta или используем default из env VSL_SESSION_ID
     const sessionId = _meta?.sessionId ?? sessionManager.getDefaultSessionId();
-    const { browser, session } = sessionManager.getSession(sessionId);
-
+    const { session } = sessionManager.getSession(sessionId);
+    const browser = sessionManager.getBrowserManager();
 
     try {
       let result: unknown;
 
       switch (name) {
         case 'vsl_get_snapshot':
-          result = await handleGetSnapshot(args as never, browser, session, config);
+          result = await handleGetSnapshot(args as never, browser, session, config, sessionId);
           break;
 
         case 'vsl_execute_action':
-          result = await handleExecuteAction(args as never, browser, session);
+          result = await handleExecuteAction(args as never, browser, session, sessionId);
           break;
 
         case 'vsl_navigate':
-          result = await handleNavigate(args as never, browser, session);
+          result = await handleNavigate(args as never, browser, session, sessionId);
           break;
 
         case 'vsl_clear_cache':
@@ -209,15 +241,18 @@ export function registerTools(server: Server, config: McpServerConfig, sessionMa
 
         case 'vsl_get_visual':
           // vsl_get_visual returns MCP-compliant ImageContent directly
-          result = await handleGetVisual(args as never, browser, session);
+          result = await handleGetVisual(args as never, browser, session, sessionId);
           break;
 
         case 'vsl_read_page':
-          result = await handleReadPage(args as never, browser, session, config);
+          result = await handleReadPage(args as never, browser, session, config, sessionId);
           break;
 
         case 'vsl_get_text_block':
           result = await handleGetTextBlock(args as never, session);
+          break;
+        case 'vsl_click_coordinates':
+          result = await handleClickCoordinates(args as never, browser, session, sessionId);
           break;
 
         default:

@@ -24,20 +24,45 @@
 
 import { executeAction } from '../../src/executor/actionExecutor';
 import type { ActionResult } from '../../src/executor/types';
-import { VslSnapshotSession } from '../../src/session/snapshotSession';
+import { VslSnapshotSession, isVslDiff } from '../../src/session/snapshotSession';
 import { FragmentExtractor } from '../../src/vision/fragmentExtractor';
 import type { ViewportCapture, VisionClassifier } from '../../src/vision/types';
 import type { LlmAction } from '../../src/llm/types';
+import {
+  filterObjectsByViewport,
+  filterDiffByViewport,
+  computeScrollable,
+  computeVisibleWindow,
+  type ScrollContext,
+  filterObjectsByDetailLevel,
+  filterDiffByDetailLevel,
+  type DetailLevel,
+  buildReverseIdMap,
+  replaceIdsInDocument,
+  replaceIdsInDiff,
+} from '../../src';
+import type { VslDocument } from '../../src/types/vsl';
 import type {
   CaptureResponse,
   ClassifyResponse,
   ExecuteRequest,
   FrameSnapshotResponse,
+  GetTextBlockRequest,
+  GetTextBlockResponse,
   IframeFrameIdsResponse,
   SnapshotRequest,
   SnapshotResponse,
 } from './protocol';
-import { MSG_CAPTURE, MSG_CLASSIFY, MSG_EXECUTE, MSG_FRAME_SNAPSHOT, MSG_IFRAME_FRAME_IDS, MSG_IFRAME_RECTS, MSG_SNAPSHOT } from './protocol';
+import {
+  MSG_CAPTURE,
+  MSG_CLASSIFY,
+  MSG_EXECUTE,
+  MSG_FRAME_SNAPSHOT,
+  MSG_GET_TEXT_BLOCK,
+  MSG_IFRAME_FRAME_IDS,
+  MSG_IFRAME_RECTS,
+  MSG_SNAPSHOT,
+} from './protocol';
 
 /** Один инстанс на время жизни страницы: кэш между шагами агентного цикла. */
 const session = new VslSnapshotSession();
@@ -209,28 +234,129 @@ async function injectIframeIdsIntoDom(): Promise<void> {
   }
 }
 
-async function handleSnapshot(vision: boolean): Promise<SnapshotResponse> {
+/**
+ * vsl/snapshot: полный документ при первом вызове/смене URL, далее дифф (§5.2).
+ *
+ * dev_7: интегрирует viewport filtering, detail_level filtering, ID mapping,
+ * lazy text loading (text_blocks) — parity с MCP pipeline.
+ *
+ * vision=true (T1.5.5): snapshotWithVision — enrichWithVision (Level 5
+ * fallback) ДО сборки; данные фрагментов возвращаются отдельно
+ * (SnapshotResponse.fragments) — в документе только метаданные (DEC-015).
+ */
+async function handleSnapshot(req: SnapshotRequest): Promise<SnapshotResponse> {
+  const viewport = { width: window.innerWidth, height: window.innerHeight };
+  const scroll: ScrollContext = {
+    x: window.scrollX,
+    y: window.scrollY,
+    width: document.documentElement.scrollWidth,
+    height: document.documentElement.scrollHeight,
+  };
   const input = {
     url: window.location.href,
-    viewport: { width: window.innerWidth, height: window.innerHeight },
+    viewport,
+    scroll,
+    ttl: req.ttl,
   };
-  if (!vision) {
-    return { snapshot: session.snapshot(requireBody(), input) };
+
+  const detailLevel: DetailLevel = req.full === true ? 'high' : (req.detail_level ?? 'medium');
+  const stripStyles = detailLevel !== 'high';
+
+  if (!req.vision) {
+    const rawResult = session.snapshot(requireBody(), input);
+    return applyPostProcessing(rawResult, detailLevel, stripStyles, viewport, scroll);
   }
   extractor ??= new FragmentExtractor({ capture: createCapturePort() });
   const result = await session.snapshotWithVision(requireBody(), input, {
     classifier: createClassifyPort(),
     extractor,
   });
+  const response = applyPostProcessing(result.snapshot, detailLevel, stripStyles, viewport, scroll);
+  response.fragments = Object.fromEntries(result.fragments);
+  return response;
+}
+
+/**
+ * Post-processing pipeline: viewport filter → detail_level filter → ID mapping.
+ * Parity с MCP getStateAfterAction (getSnapshot.ts L119-172).
+ */
+function applyPostProcessing(
+  rawResult: ReturnType<VslSnapshotSession['snapshot']>,
+  detailLevel: DetailLevel,
+  stripStyles: boolean,
+  viewport: { width: number; height: number },
+  scroll: ScrollContext,
+  prevDoc?: VslDocument | null,
+): SnapshotResponse {
+  const isDiff = isVslDiff(rawResult);
+  const currentDoc: VslDocument | null = isDiff
+    ? (session.getLastDocument() ?? null)
+    : rawResult;
+  const textBlocks = currentDoc?.text_blocks;
+  const scrollable = computeScrollable(viewport, scroll);
+  const visibleWindow = computeVisibleWindow(viewport, scroll);
+  const filterOpts = { stripStyles };
+  if (isDiff) {
+    const nextDoc = session.getLastDocument();
+    if (!nextDoc) {
+      // Should not happen: diff implies a previous document exists
+      return {
+        snapshot: { vsl_version: '1.0', canvas: { width: 0, height: 0, url: '', title: '', timestamp: '', viewport: { width: 0, height: 0, unit: 'px' }, background: '#fff', scale: 1, orientation: 'portrait' }, objects: [] } as VslDocument,
+        scrollable,
+        text_blocks: {},
+      };
+    }
+    // Diff path: viewport filter → detail_level filter → ID mapping
+    const vpFilteredDiff = filterDiffByViewport(rawResult, nextDoc, prevDoc ?? null, visibleWindow);
+    const dlFilteredDiff = filterDiffByDetailLevel(vpFilteredDiff, nextDoc, detailLevel, filterOpts);
+
+    // ID mapping: build reverse map (longId → shortId) from the full next document
+    const reverseIdMap = buildReverseIdMap(nextDoc.objects);
+    const mappedDiff = replaceIdsInDiff(dlFilteredDiff, reverseIdMap);
+
+    // Also build the filtered document for the response
+    const vpFilteredDoc = filterObjectsByViewport(nextDoc.objects, visibleWindow);
+    const dlFilteredDoc = filterObjectsByDetailLevel(vpFilteredDoc, detailLevel, filterOpts);
+    const mappedDoc = replaceIdsInDocument(
+      { ...nextDoc, objects: dlFilteredDoc },
+      reverseIdMap,
+    );
+
+    return {
+      snapshot: mappedDoc,
+      scrollable,
+      text_blocks: nextDoc.text_blocks ?? {},
+      _diff: mappedDiff,
+    } as SnapshotResponse;
+  }
+  const doc = rawResult as VslDocument;
+  const vpFilteredObjects = filterObjectsByViewport(doc.objects, visibleWindow);
+  const dlFilteredObjects = filterObjectsByDetailLevel(vpFilteredObjects, detailLevel, filterOpts);
+  const reverseIdMap = buildReverseIdMap(doc.objects);
+  const mappedDoc = replaceIdsInDocument(
+    { ...doc, objects: dlFilteredObjects },
+    reverseIdMap,
+  );
+
   return {
-    snapshot: result.snapshot,
-    fragments: Object.fromEntries(result.fragments),
+    snapshot: mappedDoc,
+    scrollable,
+    text_blocks: textBlocks ?? {},
   };
 }
 
 /** vsl/execute: исполнение действия LLM на живом DOM от того же корня. */
 function handleExecute(action: LlmAction): Promise<ActionResult> {
   return executeAction(action, { root: requireBody() });
+}
+
+/** vsl/getTextBlock: получить полный текст по txt_ref (lazy text loading, M1.7). */
+function handleGetTextBlock(blockId: string): GetTextBlockResponse {
+  const text = session.getTextBlock(blockId);
+  if (text === undefined) {
+    return { block_id: blockId, error: `Text block '${blockId}' not found` };
+  }
+  return { block_id: blockId, text };
 }
 
 /**
@@ -250,11 +376,10 @@ function isInIframe(): boolean {
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === MSG_SNAPSHOT) {
     const request = message as unknown as SnapshotRequest;
-    const vision = request.vision === true;
-    
+
     if (isInIframe()) {
       // Iframe: отправляем snapshot через chrome.runtime.sendMessage
-      handleSnapshot(vision).then((response) => {
+      handleSnapshot(request).then((response) => {
         const frameResponse: FrameSnapshotResponse = {
           type: MSG_FRAME_SNAPSHOT,
           snapshot: response.snapshot,
@@ -269,9 +394,9 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       });
       return false; // не держим канал открытым (iframe не отвечает через sendResponse)
     }
-    
+
     // Топ-фрейм: отвечаем через sendResponse (как раньше)
-    handleSnapshot(vision).then(async (response) => {
+    handleSnapshot(request).then(async (response) => {
       // Собираем rects iframe элементов для background (M2.1)
       const iframeRects = collectIframeRects();
       if (iframeRects.length > 0) {
@@ -283,11 +408,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           iframeCount: iframeRects.length,
         });
       }
-      
+
       // Iframe support (M2.1 rework): инжектим data-vsl-id в iframe элементы parent DOM
       // для vsl_get_visual поддержки. Best-effort — ошибки не блокируют snapshot.
       await injectIframeIdsIntoDom();
-      
+
       sendResponse(response);
     }, () => {
       /* сбой: канал закрывается без ответа (контракт MV3) */
@@ -299,6 +424,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     const request = message as unknown as ExecuteRequest;
     void handleExecute(request.action).then(sendResponse);
     return true; // держим канал открытым до sendResponse (контракт MV3)
+  }
+  if (message.type === MSG_GET_TEXT_BLOCK) {
+    const request = message as unknown as GetTextBlockRequest;
+    sendResponse(handleGetTextBlock(request.block_id));
+    return false; // синхронный ответ, канал не держим
   }
   return undefined; // сообщение вне протокола content script
 });

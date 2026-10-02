@@ -215,7 +215,7 @@ VSL поддерживает полный набор действий:
 **Расширенные:** drag, drop, submit, reset, open, close, expand, collapse, wait, download
 **Навигационные:** navigate, go_back, go_forward, refresh
 
-**Реализация (M1.3, `@thinkingos/vsl-sdk`):** `VALID_ACTIONS` (24 действия) и `TARGET_ACTIONS` в `src/llm/actions.ts` — единый источник правды для enum в tool-схеме и system prompt; `validateAction` валидирует ответ модели (whitelist действия + существование target_id в VSL JSON).
+**Реализация (M1.3, `@thinkingos/vsl-sdk`):** `VALID_ACTIONS` (28 действий) и `TARGET_ACTIONS` в `src/llm/actions.ts` — единый источник правды для enum в tool-схеме и system prompt; `validateAction` валидирует ответ модели (whitelist действия + существование target_id в VSL JSON).
 
 → Подробнее: [ARCHITECTURE.md §7](./ARCHITECTURE.md), [DESIGN_SYSTEM.md §3.4](./DESIGN_SYSTEM.md)
 

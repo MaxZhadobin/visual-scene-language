@@ -67,7 +67,7 @@ describe('vsl_navigate', () => {
     expect(result.status).toBe('success');
     expect(result.data?.url).toBe('https://example.com');
     expect(result.data?.title).toBe('Test Page Title');
-    expect(mockBrowser.navigate).toHaveBeenCalledWith('https://example.com');
+    expect(mockBrowser.navigate).toHaveBeenCalledWith('https://example.com', undefined);
   });
 
   it('возвращает ошибку, если URL не указан', async () => {

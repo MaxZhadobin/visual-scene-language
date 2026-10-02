@@ -1,5 +1,5 @@
 /**
- * Unit tests for SessionManager — per-session isolation.
+ * Unit tests for SessionManager — per-session isolation with singleton BrowserManager.
  */
 
 import { jest, describe, it, expect, beforeEach, afterEach } from '@jest/globals';
@@ -48,11 +48,9 @@ describe('SessionManager', () => {
       const ctx = manager.getSession('session-1');
 
       expect(ctx.sessionId).toBe('session-1');
-      expect(ctx.browser).toBeDefined();
       expect(ctx.session).toBeDefined();
       expect(ctx.createdAt).toBeGreaterThan(0);
       expect(ctx.lastAccessedAt).toBeGreaterThanOrEqual(ctx.createdAt);
-      expect(BrowserManager).toHaveBeenCalledTimes(1);
       expect(ServerSession).toHaveBeenCalledTimes(1);
     });
 
@@ -61,7 +59,6 @@ describe('SessionManager', () => {
       const ctx2 = manager.getSession('session-1');
 
       expect(ctx1).toBe(ctx2);
-      expect(BrowserManager).toHaveBeenCalledTimes(1);
     });
 
     it('создаёт разные сессии для разных sessionId', () => {
@@ -71,7 +68,6 @@ describe('SessionManager', () => {
       expect(ctx1).not.toBe(ctx2);
       expect(ctx1.sessionId).toBe('session-1');
       expect(ctx2.sessionId).toBe('session-2');
-      expect(BrowserManager).toHaveBeenCalledTimes(2);
       expect(ServerSession).toHaveBeenCalledTimes(2);
     });
 
@@ -79,6 +75,33 @@ describe('SessionManager', () => {
       const ctx = manager.getSession('');
 
       expect(ctx.sessionId).toBe('default');
+    });
+  });
+
+  describe('getBrowserManager', () => {
+    it('создаёт singleton BrowserManager при первом вызове', () => {
+      const bm = manager.getBrowserManager();
+
+      expect(bm).toBeDefined();
+      expect(BrowserManager).toHaveBeenCalledTimes(1);
+    });
+
+    it('возвращает тот же экземпляр при повторном вызове', () => {
+      const bm1 = manager.getBrowserManager();
+      const bm2 = manager.getBrowserManager();
+
+      expect(bm1).toBe(bm2);
+      expect(BrowserManager).toHaveBeenCalledTimes(1);
+    });
+
+    it('разные сессии делят один BrowserManager', () => {
+      manager.getSession('session-1');
+      manager.getSession('session-2');
+
+      const bm = manager.getBrowserManager();
+      expect(bm).toBeDefined();
+      // BrowserManager создаётся только через getBrowserManager, не через getSession
+      expect(BrowserManager).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -106,11 +129,14 @@ describe('SessionManager', () => {
   });
 
   describe('closeSession', () => {
-    it('закрывает браузер сессии', async () => {
+    it('НЕ закрывает браузер (browser — singleton, общий для всех)', async () => {
       manager.getSession('session-1');
+      // Инициализируем singleton browser
+      manager.getBrowserManager();
       await manager.closeSession('session-1');
 
-      expect(mockBrowserClose).toHaveBeenCalledTimes(1);
+      // browser.close() НЕ должен вызываться при закрытии отдельной сессии
+      expect(mockBrowserClose).not.toHaveBeenCalled();
     });
 
     it('удаляет сессию из map', async () => {
@@ -127,14 +153,18 @@ describe('SessionManager', () => {
   });
 
   describe('closeAll', () => {
-    it('закрывает все сессии', async () => {
+    it('закрывает singleton браузер один раз', async () => {
       manager.getSession('session-1');
       manager.getSession('session-2');
       manager.getSession('session-3');
 
+      // Инициализируем singleton browser
+      manager.getBrowserManager();
+
       await manager.closeAll();
 
-      expect(mockBrowserClose).toHaveBeenCalledTimes(3);
+      // BrowserManager.close() вызывается ровно 1 раз (singleton)
+      expect(mockBrowserClose).toHaveBeenCalledTimes(1);
       expect(manager.getSessionCount()).toBe(0);
     });
 

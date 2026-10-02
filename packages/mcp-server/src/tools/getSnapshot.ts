@@ -96,6 +96,8 @@ export interface SnapshotMetadata {
   execution_time_ms: number;
   /** Метаданные скролла: есть ли контент сверху/снизу видимого окна (АС[3]). */
   scrollable?: ScrollableInfo;
+  /** Warning для graceful degradation (defense-in-depth). */
+  warning?: string;
 }
 
 
@@ -122,6 +124,9 @@ function buildSemanticMap(elements: unknown[]): SemanticMap {
   const map: SemanticMap = new Map();
   
   function visit(el: unknown): void {
+    // Null/undefined check — защита от malformed элементов из DOM/сериализации
+    if (!el || typeof el !== 'object') return;
+
     const elem = el as {
       indexPath?: number[];
       role?: string;
@@ -145,6 +150,8 @@ function buildSemanticMap(elements: unknown[]): SemanticMap {
     // Recurse into children
     if (elem.children && Array.isArray(elem.children)) {
       for (const child of elem.children) {
+        // Null/undefined check для каждого ребёнка
+        if (!child || typeof child !== 'object') continue;
         visit(child);
       }
     }
@@ -420,16 +427,63 @@ export interface DomExtractionResult {
  *    иначе SDK segmentTree получит объект-обёртку без поля attributes и упадёт
  *    с "Cannot read properties of undefined (reading 'aria-hidden')".
  */
-export async function extractDomTree(browser: BrowserManager): Promise<DomExtractionResult> {
+export async function extractDomTree(browser: BrowserManager, sessionId: string): Promise<DomExtractionResult> {
   const extractionResult = await browser.evaluate(
     extractDomTreeInBrowser,
+    sessionId,
   ) as Array<{ __type: string } & DomExtractionResult>;
 
   const extraction = Array.isArray(extractionResult) ? extractionResult[0] : undefined;
   if (!extraction || !Array.isArray(extraction.elements)) {
     throw new Error('Failed to extract DOM tree: empty result');
   }
+
+  // Валидация: фильтруем элементы без поля attributes (могут возникнуть
+  // при ошибке сериализации через browser.evaluate() или edge cases в DOM).
+  const invalidCount = countMalformedElements(extraction.elements);
+  if (invalidCount > 0) {
+    console.warn(`[VSL] Filtering ${invalidCount} malformed elements (missing attributes) from DOM extraction`);
+    extraction.elements = filterMalformedElements(extraction.elements);
+  }
+
   return extraction;
+}
+
+/**
+ * Рекурсивно подсчитает элементы без поля attributes (для логирования).
+ */
+function countMalformedElements(elements: readonly unknown[]): number {
+  let count = 0;
+  for (const el of elements) {
+    if (!el || typeof el !== 'object' || !('attributes' in (el as Record<string, unknown>))) {
+      count++;
+    }
+    const children = (el as Record<string, unknown>)?.children;
+    if (Array.isArray(children)) {
+      count += countMalformedElements(children);
+    }
+  }
+  return count;
+}
+
+/**
+ * Рекурсивно фильтрует элементы без поля attributes.
+ * Некорректные элементы пропускаются (graceful degradation).
+ */
+function filterMalformedElements(elements: readonly unknown[]): unknown[] {
+  const result: unknown[] = [];
+  for (const el of elements) {
+    if (!el || typeof el !== 'object' || !('attributes' in (el as Record<string, unknown>))) {
+      continue;
+    }
+    const clean = { ...(el as Record<string, unknown>) };
+    const children = clean.children;
+    if (Array.isArray(children)) {
+      clean.children = filterMalformedElements(children);
+    }
+    result.push(clean);
+  }
+  return result;
 }
 
 /**
@@ -449,6 +503,7 @@ export async function handleGetSnapshot(
   browser: BrowserManager,
   session: ServerSession,
   _config: McpServerConfig,
+  sessionId: string,
   ): Promise<GetSnapshotResult> {
   const startTime = Date.now();
   const detailLevel = args.detail_level || 'medium';
@@ -517,7 +572,7 @@ export async function handleGetSnapshot(
 
     // 1. Навигация по URL (если указан)
     if (args.url) {
-      await browser.navigate(args.url);
+      await browser.navigate(args.url, sessionId);
     }
 
     // 2. Проверяем, что браузер доступен
@@ -533,21 +588,30 @@ export async function handleGetSnapshot(
     // 3. Извлекаем полное DOM-дерево (без viewport culling).
     //    Общий хелпер передаёт функцию в evaluate напрямую и разворачивает
     //    обёртку результата (ошибка обработки — во внешнем try/catch).
-    const extraction = await extractDomTree(browser);
+    const extraction = await extractDomTree(browser, sessionId);
     const extractedElements = extraction.elements;
     const viewport = extraction.viewport;
-    const url = args.url || (await browser.evaluate(() => window.location.href)) as string;
-    const title = await browser.evaluate(() => document.title);
+    const url = args.url || (await browser.evaluate(() => window.location.href, sessionId)) as string;
+    const title = await browser.evaluate(() => document.title, sessionId);
 
     // 3.1. Build semantic map for fallback selectors (reCAPTCHA, hCaptcha support)
     //    Maps indexPath → semantic attributes (role, aria-label, aria-labelledby)
     //    Used by injectVslIds when indexPath navigation fails
-    const semanticMap = buildSemanticMap(extractedElements);
+    //    Defense-in-depth: если buildSemanticMap падает — продолжаем без semantic map
+    let semanticMap: SemanticMap = new Map();
+    let snapshotWarning: string | undefined;
+    try {
+      semanticMap = buildSemanticMap(extractedElements);
+    } catch (error) {
+      const msg = `buildSemanticMap failed (graceful degradation): ${error instanceof Error ? error.message : String(error)}`;
+      console.error('[VSL]', msg, error);
+      snapshotWarning = msg;
+    }
 
     // 3.5. Iframe support (M2.1): извлекаем iframe элементы и их DOM.
     //    Для каждого iframe создаём sub-VslDocument и добавляем как iframe-объект.
     //    Best-effort: если результат не массив (например, в тестах), пропускаем iframe extraction.
-    const iframeElementsRaw = await browser.evaluate(extractIframesInBrowser);
+    const iframeElementsRaw = await browser.evaluate(extractIframesInBrowser, sessionId);
     const iframeElements = Array.isArray(iframeElementsRaw) ? iframeElementsRaw as Array<{
       url: string;
       rect: { x: number; y: number; width: number; height: number };
@@ -573,7 +637,7 @@ export async function handleGetSnapshot(
       if (!iframeInfo.url) continue;
       try {
         // Находим Playwright frame по URL с partial match (URL может отличаться из-за редиректов/параметров)
-        const allFrames = await browser.getFrames();
+        const allFrames = await browser.getFrames(sessionId);
         const frame = allFrames.find(f => {
           const frameUrl = f.url();
           return frameUrl === iframeInfo.url ||
@@ -665,7 +729,14 @@ export async function handleGetSnapshot(
 
     // 7.5. Inject data-vsl-id attributes into DOM for execute_action
     // Shared utility ensures consistent injection across getSnapshot, navigate, executeAction
-    await injectVslIdsIntoDom(browser, currentDoc.objects, semanticMap);
+    // Defense-in-depth: если injection падает — продолжаем без data-vsl-id (snapshot валиден)
+    try {
+      await injectVslIdsIntoDom(browser, currentDoc.objects, semanticMap, sessionId);
+    } catch (error) {
+      const msg = `injectVslIdsIntoDom failed (graceful degradation): ${error instanceof Error ? error.message : String(error)}`;
+      console.error('[VSL]', msg, error);
+      snapshotWarning = snapshotWarning ? `${snapshotWarning}; ${msg}` : msg;
+    }
     // 9. Единый пайплайн отдачи (АС[3]): вьюпорт-фильтр по абсолютным
     //    координатам + скролл-контексту, затем detail_level (DEC-027).
     const scrollContext = session.getScrollContext();
@@ -712,6 +783,7 @@ export async function handleGetSnapshot(
       timestamp: new Date().toISOString(),
       execution_time_ms: executionTimeMs,
       scrollable,
+      ...(snapshotWarning ? { warning: snapshotWarning } : {}),
     };
 
     // 12. Сохраняем ПОЛНЫЙ документ в кэш (если TTL > 0, АС[5]).

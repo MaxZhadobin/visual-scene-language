@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 /**
  * Unit tests for BrowserManager upload methods (uploadFile, waitForFileChooser).
  *
@@ -39,9 +40,10 @@ describe('BrowserManager upload methods', () => {
     };
 
     manager = new BrowserManager(mockConfig);
-    // Inject mock page directly into private field
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    // Inject mock page, browser, and context directly into private fields
     (manager as any).page = mockPage;
+    (manager as any).browser = {}; // prevent launch() call in getPage()
+    (manager as any).context = { newPage: jest.fn().mockResolvedValue(mockPage), on: jest.fn() }; // support getPage(sessionId)
   });
 
   describe('uploadFile', () => {
@@ -125,7 +127,7 @@ describe('BrowserManager upload methods', () => {
       const mockFileChooser = { setFiles: jest.fn() };
       mockPage.waitForEvent.mockResolvedValue(mockFileChooser);
 
-      const result = await manager.waitForFileChooser();
+      const result = await manager.waitForFileChooser('default');
 
       expect(result).toBe(mockFileChooser);
       expect(mockPage.waitForEvent).toHaveBeenCalledWith('filechooser', {
@@ -134,7 +136,7 @@ describe('BrowserManager upload methods', () => {
     });
 
     it('использует дефолтный timeout из config.downloadTimeout', async () => {
-      await manager.waitForFileChooser();
+      await manager.waitForFileChooser('default');
 
       expect(mockPage.waitForEvent).toHaveBeenCalledWith('filechooser', {
         timeout: 30000, // mockConfig.downloadTimeout
@@ -142,7 +144,7 @@ describe('BrowserManager upload methods', () => {
     });
 
     it('использует кастомный timeout если передан', async () => {
-      await manager.waitForFileChooser(5000);
+      await manager.waitForFileChooser('default', 5000);
 
       expect(mockPage.waitForEvent).toHaveBeenCalledWith('filechooser', {
         timeout: 5000,
@@ -151,14 +153,228 @@ describe('BrowserManager upload methods', () => {
 
     it('использует дефолт 60000 если downloadTimeout не задан в config', async () => {
       const managerNoTimeout = new BrowserManager({} as BrowserConfig);
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (managerNoTimeout as any).page = mockPage;
-
-      await managerNoTimeout.waitForFileChooser();
+      (managerNoTimeout as any).context = { newPage: jest.fn().mockResolvedValue(mockPage), on: jest.fn() };
+      await managerNoTimeout.waitForFileChooser('default');
 
       expect(mockPage.waitForEvent).toHaveBeenCalledWith('filechooser', {
         timeout: 60000,
       });
     });
+  });
+});
+
+describe('launch scenarios', () => {
+  let manager: BrowserManager;
+  let mockChromium: {
+    launch: jest.Mock;
+    connectOverCDP: jest.Mock;
+    launchPersistentContext: jest.Mock;
+  };
+  let mockBrowser: {
+    contexts: jest.Mock;
+    newContext: jest.Mock;
+    close: jest.Mock;
+  };
+  let mockContext: {
+    newPage: jest.Mock;
+    close: jest.Mock;
+    on: jest.Mock;
+  };
+
+  beforeEach(() => {
+    mockContext = {
+      newPage: jest.fn().mockResolvedValue({}),
+      close: jest.fn().mockResolvedValue(undefined),
+      on: jest.fn(),
+    };
+
+    mockBrowser = {
+      contexts: jest.fn().mockReturnValue([mockContext]),
+      newContext: jest.fn().mockResolvedValue(mockContext),
+      close: jest.fn().mockResolvedValue(undefined),
+    };
+
+    mockChromium = {
+      launch: jest.fn().mockResolvedValue(mockBrowser),
+      connectOverCDP: jest.fn().mockResolvedValue(mockBrowser),
+      launchPersistentContext: jest.fn().mockResolvedValue(mockContext),
+    };
+
+    manager = new BrowserManager({} as BrowserConfig);
+
+    // Mock loadPlaywright to return our mock chromium
+    jest.spyOn(manager as any, 'loadPlaywright').mockResolvedValue({
+      chromium: mockChromium,
+    });
+  });
+
+  it('launch() с CDP: вызывает connectOverCDP с правильным endpointURL', async () => {
+    const cdpConfig: BrowserConfig = { cdpPort: 9222 } as BrowserConfig;
+    const cdpManager = new BrowserManager(cdpConfig);
+    jest.spyOn(cdpManager as any, 'loadPlaywright').mockResolvedValue({
+      chromium: mockChromium,
+    });
+
+    await cdpManager.launch();
+
+    expect(mockChromium.connectOverCDP).toHaveBeenCalledWith({
+      endpointURL: 'http://localhost:9222',
+    });
+    expect((cdpManager as any).connectedViaCDP).toBe(true);
+    expect((cdpManager as any).context).toBe(mockContext);
+  });
+
+  it('launch() с CDP: использует существующий context из browser.contexts()', async () => {
+    const cdpConfig: BrowserConfig = { cdpPort: 9222 } as BrowserConfig;
+    const cdpManager = new BrowserManager(cdpConfig);
+    jest.spyOn(cdpManager as any, 'loadPlaywright').mockResolvedValue({
+      chromium: mockChromium,
+    });
+
+    await cdpManager.launch();
+
+    expect(mockBrowser.contexts).toHaveBeenCalled();
+    expect(mockBrowser.newContext).not.toHaveBeenCalled();
+  });
+
+  it('launch() с CDP: создаёт новый context если contexts() пустой', async () => {
+    mockBrowser.contexts.mockReturnValue([]);
+    const cdpConfig: BrowserConfig = { cdpPort: 9223 } as BrowserConfig;
+    const cdpManager = new BrowserManager(cdpConfig);
+    jest.spyOn(cdpManager as any, 'loadPlaywright').mockResolvedValue({
+      chromium: mockChromium,
+    });
+
+    await cdpManager.launch();
+
+    expect(mockBrowser.newContext).toHaveBeenCalledWith({
+      acceptDownloads: true,
+    });
+  });
+
+  it('launch() с cdpPort: если connectOverCDP упал → запускает launchPersistentContext с --remote-debugging-port', async () => {
+    // connectOverCDP падает (браузер не запущен)
+    mockChromium.connectOverCDP.mockRejectedValueOnce(new Error('Connection refused'));
+    const cdpConfig: BrowserConfig = { cdpPort: 9222, headless: true } as BrowserConfig;
+    const cdpManager = new BrowserManager(cdpConfig);
+    jest.spyOn(cdpManager as any, 'loadPlaywright').mockResolvedValue({
+      chromium: mockChromium,
+    });
+
+    await cdpManager.launch();
+
+    // Должен вызвать launchPersistentContext с --remote-debugging-port
+    expect(mockChromium.launchPersistentContext).toHaveBeenCalledWith(
+      expect.stringContaining('.vsl/browser-profile'),
+      expect.objectContaining({
+        args: ['--remote-debugging-port=9222'],
+        headless: true,
+        acceptDownloads: true,
+      }),
+    );
+    expect((cdpManager as any).browser).toBeNull();
+    expect((cdpManager as any).context).toBe(mockContext);
+  });
+
+  it('launch() с userDataDir: вызывает launchPersistentContext', async () => {
+    const persistentConfig: BrowserConfig = {
+      userDataDir: '/tmp/test-profile',
+      headless: true,
+    } as BrowserConfig;
+    const persistentManager = new BrowserManager(persistentConfig);
+    jest.spyOn(persistentManager as any, 'loadPlaywright').mockResolvedValue({
+      chromium: mockChromium,
+    });
+
+    await persistentManager.launch();
+
+    expect(mockChromium.launchPersistentContext).toHaveBeenCalledWith(
+      '/tmp/test-profile',
+      {
+        headless: true,
+        acceptDownloads: true,
+      },
+    );
+    expect((persistentManager as any).browser).toBeNull();
+    expect((persistentManager as any).context).toBe(mockContext);
+  });
+
+  it('launch() без cdpPort и userDataDir: использует persistent context с дефолтным путём ~/.vsl/browser-profile', async () => {
+    const defaultConfig: BrowserConfig = { headless: false } as BrowserConfig;
+    const defaultManager = new BrowserManager(defaultConfig);
+    jest.spyOn(defaultManager as any, 'loadPlaywright').mockResolvedValue({
+      chromium: mockChromium,
+    });
+
+    await defaultManager.launch();
+
+    // Проверяем, что launchPersistentContext вызван с дефолтным путём
+    expect(mockChromium.launchPersistentContext).toHaveBeenCalledWith(
+      expect.stringContaining('.vsl/browser-profile'),
+      {
+        headless: false,
+        acceptDownloads: true,
+      },
+    );
+    expect((defaultManager as any).browser).toBeNull();
+    expect((defaultManager as any).context).toBe(mockContext);
+  });
+
+  it('launch() не вызывает loadPlaywright повторно если уже запущен', async () => {
+    const ephemeralConfig: BrowserConfig = {} as BrowserConfig;
+    const ephemeralManager = new BrowserManager(ephemeralConfig);
+    const loadSpy = jest
+      .spyOn(ephemeralManager as any, 'loadPlaywright')
+      .mockResolvedValue({ chromium: mockChromium });
+
+    await ephemeralManager.launch();
+    await ephemeralManager.launch(); // Second call
+
+    expect(loadSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('close scenarios', () => {
+  let manager: BrowserManager;
+  let mockBrowser: { close: jest.Mock };
+  let mockContext: { close: jest.Mock };
+
+  beforeEach(() => {
+    mockBrowser = { close: jest.fn().mockResolvedValue(undefined) };
+    mockContext = { close: jest.fn().mockResolvedValue(undefined) };
+    manager = new BrowserManager({} as BrowserConfig);
+  });
+
+  it('close() с CDP: закрывает context, но НЕ закрывает browser', async () => {
+    (manager as any).browser = mockBrowser;
+    (manager as any).context = mockContext;
+    (manager as any).connectedViaCDP = true;
+
+    await manager.close();
+
+    expect(mockContext.close).toHaveBeenCalled();
+    expect(mockBrowser.close).not.toHaveBeenCalled();
+    expect((manager as any).connectedViaCDP).toBe(false);
+  });
+
+  it('close() без CDP: закрывает и context, и browser', async () => {
+    (manager as any).browser = mockBrowser;
+    (manager as any).context = mockContext;
+    (manager as any).connectedViaCDP = false;
+
+    await manager.close();
+
+    expect(mockContext.close).toHaveBeenCalled();
+    expect(mockBrowser.close).toHaveBeenCalled();
+  });
+
+  it('close() с persistent context (browser=null): закрывает только context', async () => {
+    (manager as any).browser = null;
+    (manager as any).context = mockContext;
+
+    await manager.close();
+
+    expect(mockContext.close).toHaveBeenCalled();
   });
 });

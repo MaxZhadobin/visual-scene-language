@@ -105,6 +105,7 @@ describe('vsl_execute_action — iframe interaction (M2.1)', () => {
       // Setup: Playwright frame mock
       const mockFrameLocator = {
         click: jest.fn().mockResolvedValue(undefined),
+        count: jest.fn().mockResolvedValue(1),
       };
       const mockFrame = {
         url: () => 'https://captcha.com/iframe',
@@ -173,6 +174,7 @@ describe('vsl_execute_action — iframe interaction (M2.1)', () => {
 
       const mockFrameLocator = {
         click: jest.fn().mockResolvedValue(undefined),
+        count: jest.fn().mockResolvedValue(1),
       };
       const mockFrame = {
         url: () => 'https://captcha.com/iframe',
@@ -205,6 +207,7 @@ describe('vsl_execute_action — iframe interaction (M2.1)', () => {
 
       const mockFrameLocator = {
         click: jest.fn().mockResolvedValue(undefined),
+        count: jest.fn().mockResolvedValue(1),
       };
       // Frame URL differs slightly (extra query params)
       const mockFrame = {

@@ -9,7 +9,12 @@
  * Решение: per-session isolation через Map<sessionId, SessionContext>.
  * Каждый агент получает свою изолированную сессию с собственным:
  *  - ServerSession (snapshot, diff, cache)
- *  - BrowserManager (browser context, page, downloads)
+ *  - Отдельной вкладкой (page) в ОДНОМ браузере
+ *
+ * Важно: все сессии делят ОДИН BrowserManager (singleton), который запускает
+ * ОДИН браузер. Каждая сессия работает в своей вкладке (page), но все вкладки
+ * делят один browser context, поэтому cookies/localStorage автоматически
+ * синхронизируются между сессиями.
  *
  * Session ID извлекается из MCP request context (_meta.sessionId).
  * Если sessionId не передан — используется 'default' (для обратной совместимости).
@@ -24,10 +29,9 @@ import type { BrowserConfig } from '../config/loader.js';
 import { BrowserManager } from '../browser/manager.js';
 import { ServerSession } from './serverSession.js';
 
-/** Контекст одной сессии: browser + session state. */
+/** Контекст одной сессии: session state. */
 export interface SessionContext {
   sessionId: string;
-  browser: BrowserManager;
   session: ServerSession;
   createdAt: number;
   lastAccessedAt: number;
@@ -41,7 +45,9 @@ export class SessionManager {
   private readonly sessionTtlMs: number;
   private readonly defaultSessionId: string;
   private cleanupTimer: NodeJS.Timeout | null = null;
-
+  
+  /** Singleton BrowserManager — один браузер на все сессии. */
+  private browserManager: BrowserManager | null = null;
   constructor(
     browserConfig: BrowserConfig,
     options?: {
@@ -61,7 +67,6 @@ export class SessionManager {
     // Запускаем периодический cleanup
     this.startCleanup();
   }
-
   /**
    * Возвращает default session ID (из env VSL_SESSION_ID или 'default').
    * Используется для fallback, когда _meta.sessionId не передан.
@@ -71,8 +76,21 @@ export class SessionManager {
   }
 
   /**
+   * Возвращает singleton BrowserManager (создаёт при первом вызове).
+   * Все сессии делят один браузер — это стандартный паттерн Playwright
+   * для multi-tenant scenarios.
+   */
+  getBrowserManager(): BrowserManager {
+    if (!this.browserManager) {
+      this.browserManager = new BrowserManager(this.browserConfig);
+    }
+    return this.browserManager;
+  }
+
+  /**
    * Получает или создаёт сессию по sessionId.
-   * Если сессия не существует — создаёт новую с собственным BrowserManager и ServerSession.
+   * Если сессия не существует — создаёт новую с ServerSession.
+   * Все сессии делят ОДИН BrowserManager (singleton).
    */
   getSession(sessionId: string): SessionContext {
     const normalizedId = sessionId || this.defaultSessionId;
@@ -80,7 +98,6 @@ export class SessionManager {
     if (!this.sessions.has(normalizedId)) {
       const context: SessionContext = {
         sessionId: normalizedId,
-        browser: new BrowserManager(this.browserConfig),
         session: new ServerSession(),
         createdAt: Date.now(),
         lastAccessedAt: Date.now(),
@@ -101,37 +118,35 @@ export class SessionManager {
   }
 
   /**
-   * Закрывает сессию и освобождает ресурсы (browser, cache).
+   * Закрывает сессию и освобождает ресурсы (cache).
+   * Браузер НЕ закрывается — он общий для всех сессий.
    */
   async closeSession(sessionId: string): Promise<void> {
     const normalizedId = sessionId || this.defaultSessionId;
     const context = this.sessions.get(normalizedId);
 
     if (context) {
-      await context.browser.close();
+      // Браузер не закрываем — он singleton
       this.sessions.delete(normalizedId);
     }
   }
 
   /**
-   * Закрывает все сессии (при shutdown сервера).
+   * Закрывает все сессии и браузер (при shutdown сервера).
    */
   async closeAll(): Promise<void> {
     this.stopCleanup();
 
-    // Используем Promise.allSettled() вместо Promise.all() для предотвращения
-    // падения всего closeAll() если хотя бы один browser.close() отклоняется.
-    // Это предотвращает разрыв MCP соединения (MCP error -32000: Connection closed)
-    const closePromises = Array.from(this.sessions.values()).map(async (context) => {
+    // Закрываем singleton браузер
+    if (this.browserManager) {
       try {
-        await context.browser.close();
+        await this.browserManager.close();
       } catch (error) {
-        console.error('[SessionManager] Error closing browser session:', error);
-        // Продолжаем закрытие остальных сессий
+        console.error('[SessionManager] Error closing browser:', error);
       }
-    });
+      this.browserManager = null;
+    }
 
-    await Promise.allSettled(closePromises);
     this.sessions.clear();
   }
 

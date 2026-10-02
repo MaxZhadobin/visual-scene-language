@@ -925,6 +925,7 @@ VSL использует **гибридный подход** к сбору да�
 | `select` | Выбор из списка | `target_id`, `option` | `{"action": "select", "target_id": "select_country", "option": "Russia"}` |
 | `check` | Отметить чекбокс | `target_id` | `{"action": "check", "target_id": "checkbox_terms"}` |
 | `uncheck` | Снять чекбокс | `target_id` | `{"action": "uncheck", "target_id": "checkbox_terms"}` |
+| `clickCoordinates` | Клики по координатам относительно элемента | `target_id`, `value` (JSON-массив кликов) | `{"action": "clickCoordinates", "target_id": "iframe_2", "value": "[{\"x\":50,\"y\":50}]"}` |
 
 ### 7.2 Расширенные действия
 
@@ -940,6 +941,44 @@ VSL использует **гибридный подход** к сбору да�
 | `collapse` | Свёртывание | `target_id` |
 | `wait` | Ожидание | `condition`, `timeout` |
 | `download` | Управление загрузкой файлов | `target_id` (клик по элементу) ИЛИ `value` (URL для прямого скачивания), `save_path` (опционально) |
+### 7.2.1 Матрица соответствия действий MCP ↔ Extension
+
+| Действие | MCP | Extension | Описание |
+|----------|-----|-----------|----------|
+| `click` | ✅ | ✅ | Клик по элементу |
+| `type` | ✅ | ✅ | Ввод текста |
+| `fill` | ✅ | ✅ | Алиас `type` (MCP convenience, parity) |
+| `clear` | ✅ | ✅ | Очистка поля |
+| `scroll` | ✅ | ✅ | Скролл |
+| `select` | ✅ | ✅ | Выбор из списка |
+| `hover` | ✅ | ✅ | Наведение курсора |
+| `focus` | ✅ | ✅ | Установка фокуса |
+| `blur` | ✅ | ✅ | Снятие фокуса |
+| `check` | ✅ | ✅ | Отметить чекбокс |
+| `uncheck` | ✅ | ✅ | Снять чекбокс |
+| `press` | ✅ | ✅ | Нажатие клавиши (KeyboardEvent) |
+| `download` | ✅ | ✅ | Загрузка файлов |
+| `upload` | ✅ | ✅ | Загрузка файлов в input[type=file] |
+| `drag` | ✅ | ✅ | Перетаскивание |
+| `drop` | ✅ | ✅ | Отпускание |
+| `submit` | ✅ | ✅ | Отправка формы |
+| `reset` | ✅ | ✅ | Сброс формы |
+| `open` | ✅ | ✅ | Открытие (modal, dropdown) |
+| `close` | ✅ | ✅ | Закрытие (modal, dropdown) |
+| `expand` | ✅ | ✅ | Развёртывание |
+| `collapse` | ✅ | ✅ | Свёртывание |
+| `wait` | ✅ | ✅ | Ожидание |
+| `navigate` | ❌ | ✅ | Переход по URL (Extension-only, MCP использует `vsl_navigate` tool) |
+| `go_back` | ✅ | ✅ | Назад (browser history) |
+| `go_forward` | ✅ | ✅ | Вперёд (browser history) |
+| `refresh` | ✅ | ✅ | Обновление страницы |
+| `clickCoordinates` | ❌ | ✅ | Клики по координатам (Extension-only, MCP использует `vsl_click_coordinates` tool) |
+
+**Итого:** MCP — 28 действий, Extension — 28 действий.
+
+**Расхождения:**
+- MCP-only (0): все действия MCP доступны в Extension
+- Extension-only (2): `navigate` (MCP имеет отдельный tool `vsl_navigate`), `clickCoordinates` (MCP имеет отдельный tool `vsl_click_coordinates`)
 ### 7.3 Навигационные действия
 
 | Действие | Описание | Параметры |

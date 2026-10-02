@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Visual CAPTCHA Test — vsl_click_coordinates</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            background: #f0f2f5;
+        }
+        .captcha-container {
+            background: white;
+            padding: 24px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.15);
+            max-width: 400px;
+        }
+        h2 {
+            margin: 0 0 8px 0;
+            color: #333;
+            font-size: 18px;
+        }
+        .captcha-instruction {
+            font-size: 14px;
+            color: #666;
+            margin-bottom: 16px;
+        }
+        .captcha-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 4px;
+            margin-bottom: 16px;
+            border: 2px solid #4CAF50;
+            border-radius: 4px;
+            padding: 4px;
+            background: #e8f5e9;
+        }
+        .captcha-cell {
+            width: 100px;
+            height: 100px;
+            border: 2px solid #ddd;
+            border-radius: 4px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 48px;
+            background: white;
+            transition: all 0.2s;
+            user-select: none;
+        }
+        .captcha-cell:hover {
+            border-color: #4CAF50;
+            background: #f1f8f4;
+        }
+        .captcha-cell.selected {
+            border-color: #2196F3;
+            background: #e3f2fd;
+            box-shadow: 0 0 0 3px rgba(33, 150, 243, 0.3);
+        }
+        .captcha-cell.selected::after {
+            content: '✓';
+            position: absolute;
+            top: 4px;
+            right: 4px;
+            font-size: 20px;
+            color: #2196F3;
+            font-weight: bold;
+        }
+        .captcha-cell {
+            position: relative;
+        }
+        .verify-btn {
+            width: 100%;
+            padding: 12px;
+            font-size: 16px;
+            background: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+        }
+        .verify-btn:hover {
+            background: #45a049;
+        }
+        .result {
+            margin-top: 12px;
+            padding: 10px;
+            border-radius: 4px;
+            text-align: center;
+            display: none;
+            font-size: 14px;
+        }
+        .result.success {
+            background: #d4edda;
+            color: #155724;
+            display: block;
+        }
+        .result.error {
+            background: #f8d7da;
+            color: #721c24;
+            display: block;
+        }
+        .selection-info {
+            margin-top: 8px;
+            font-size: 12px;
+            color: #666;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <div class="captcha-container">
+        <h2>🔒 Выберите все изображения с котами</h2>
+        <p class="captcha-instruction">Нажмите на ячейки, содержащие котов, затем нажмите "Проверить"</p>
+        <div class="captcha-grid" id="captcha-grid">
+            <!-- 3x3 grid: cells 0-8 -->
+            <!-- Row 1 -->
+            <div class="captcha-cell" data-index="0" data-has-cat="true">🐱</div>
+            <div class="captcha-cell" data-index="1" data-has-cat="false">🚗</div>
+            <div class="captcha-cell" data-index="2" data-has-cat="true">🐈</div>
+            <!-- Row 2 -->
+            <div class="captcha-cell" data-index="3" data-has-cat="false">🌳</div>
+            <div class="captcha-cell" data-index="4" data-has-cat="true">🐱</div>
+            <div class="captcha-cell" data-index="5" data-has-cat="false">🏠</div>
+            <!-- Row 3 -->
+            <div class="captcha-cell" data-index="6" data-has-cat="false">📱</div>
+            <div class="captcha-cell" data-index="7" data-has-cat="true">🐈</div>
+            <div class="captcha-cell" data-index="8" data-has-cat="false">🎸</div>
+        </div>
+        <button class="verify-btn" id="verify-btn" onclick="verifySelection()">✓ Проверить</button>
+        <div class="selection-info" id="selection-info">Выбрано: 0 ячеек</div>
+        <div class="result" id="result"></div>
+    </div>
+
+    <script>
+        const selectedCells = new Set();
+        const correctAnswers = new Set([0, 2, 4, 7]); // Индексы ячеек с котами
+
+        // Обработчик клика на ячейку
+        document.querySelectorAll('.captcha-cell').forEach(cell => {
+            cell.addEventListener('click', function() {
+                const index = parseInt(this.dataset.index);
+                if (selectedCells.has(index)) {
+                    selectedCells.delete(index);
+                    this.classList.remove('selected');
+                } else {
+                    selectedCells.add(index);
+                    this.classList.add('selected');
+                }
+                updateSelectionInfo();
+            });
+        });
+
+        function updateSelectionInfo() {
+            document.getElementById('selection-info').textContent = 
+                `Выбрано: ${selectedCells.size} ячеек`;
+        }
+
+        function verifySelection() {
+            const resultDiv = document.getElementById('result');
+            
+            // Проверяем, совпадает ли выбор с правильным ответом
+            const isCorrect = selectedCells.size === correctAnswers.size &&
+                [...selectedCells].every(idx => correctAnswers.has(idx));
+
+            if (isCorrect) {
+                resultDiv.textContent = '✅ CAPTCHA пройдена! Все коты найдены.';
+                resultDiv.className = 'result success';
+            } else {
+                resultDiv.textContent = '❌ Неверно. Попробуйте ещё раз.';
+                resultDiv.className = 'result error';
+                // Сбрасываем выбор
+                selectedCells.clear();
+                document.querySelectorAll('.captcha-cell').forEach(cell => {
+                    cell.classList.remove('selected');
+                });
+                updateSelectionInfo();
+            }
+        }
+
+        // Логируем клики для отладки
+        document.addEventListener('click', function(e) {
+            if (e.target.classList.contains('captcha-cell')) {
+                const rect = e.target.getBoundingClientRect();
+                console.log(`Cell clicked: index=${e.target.dataset.index}, ` +
+                    `bbox=[${Math.round(rect.x)}, ${Math.round(rect.y)}, ` +
+                    `${Math.round(rect.width)}, ${Math.round(rect.height)}]`);
+            }
+        });
+    </script>
+</body>
+</html>

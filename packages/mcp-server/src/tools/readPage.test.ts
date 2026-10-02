@@ -15,6 +15,7 @@
 
 import { describe, it, expect, beforeEach, jest } from '@jest/globals';
 import { handleReadPage } from './readPage.js';
+import { buildVslFromDom } from './httpExtractor.js';
 import type { BrowserManager } from '../browser/manager.js';
 import type { ServerSession } from '../session/serverSession.js';
 import type { McpServerConfig } from '../config/loader.js';
@@ -129,7 +130,7 @@ describe('vsl_read_page', () => {
     expect(result.data?.content).toContain('App Content');
     expect(result.data?.metadata.isSpa).toBe(true);
     expect(result.data?.vslDocument).toBeDefined();
-    expect(mockBrowser.navigate).toHaveBeenCalledWith('https://spa.example.com');
+    expect(mockBrowser.navigate).toHaveBeenCalledWith('https://spa.example.com', undefined);
     // Рендер-путь строит документ через SDK-пайплайн (АС[3])
     expect(mockSession.snapshotFromElements).toHaveBeenCalled();
   });
@@ -364,5 +365,94 @@ describe('vsl_read_page', () => {
     expect(result.data?.content).toContain('Visible content');
     expect(result.data?.content).not.toContain('alert');
     expect(result.data?.content).not.toContain('display: none');
+  });
+
+  it('HTTP path: vslDocument содержит короткие ID (buildVslFromDom генерирует их напрямую)', async () => {
+    // HTML содержит button и input — buildVslFromDom сгенерирует короткие ID через createIdGenerator
+    const html = '<html><head><title>Test</title></head><body><button>Click me</button><input type="text" /></body></html>';
+
+    (global.fetch as jest.Mock).mockResolvedValueOnce({
+      ok: true,
+      text: () => Promise.resolve(html),
+    });
+
+    // В HTTP path buildVslFromDom уже генерирует короткие ID (btn_0, inp_0),
+    // поэтому reverseIdMap пустой — маппинг не нужен
+    mockSession.getReverseIdMap.mockReturnValue(new Map());
+
+    // buildVslFromDom генерирует короткие ID напрямую через createIdGenerator.
+    // getSnapshot должен возвращать документ, сгенерированный buildVslFromDom
+    // (именно это делает session.setSnapshot в реальном коде)
+    const expectedVslDoc = buildVslFromDom(html, { url: 'https://example.com' });
+    mockSession.getSnapshot.mockReturnValue(expectedVslDoc as never);
+
+    const result = await handleReadPage(
+      { url: 'https://example.com' },
+      mockBrowser,
+      mockSession,
+      mockConfig,
+    );
+
+    expect(result.status).toBe('success');
+    expect(result.data?.mode).toBe('http');
+    expect(result.data?.vslDocument).toBeDefined();
+
+    // buildVslFromDom генерирует короткие ID напрямую через createIdGenerator
+    const vslDoc = result.data?.vslDocument as { objects?: Array<{ id: string; t: string }> };
+    expect(vslDoc?.objects).toBeDefined();
+    expect(vslDoc?.objects!.length).toBeGreaterThanOrEqual(2);
+    // Найти button и input среди объектов (порядок зависит от обхода DOM)
+    const buttonObj = vslDoc?.objects?.find(o => o.t === 'button');
+    const inputObj = vslDoc?.objects?.find(o => o.t === 'input');
+    expect(buttonObj).toBeDefined();
+    expect(inputObj).toBeDefined();
+    expect(buttonObj?.id).toMatch(/^btn_\d+$/);
+    expect(inputObj?.id).toMatch(/^inp_\d+$/);
+  });
+
+  it('render path: vslDocument содержит короткие ID после маппинга', async () => {
+    const html = '<html><head><title>SPA</title><style>#root { display: block; }</style></head><body><div id="root">Content</div></body></html>';
+
+    mockBrowser.isAvailable.mockResolvedValue(true);
+    mockBrowser.getContent.mockResolvedValue(html);
+    mockBrowser.evaluate.mockResolvedValue([{
+      __type: 'extraction_result',
+      elements: [],
+      viewport: { width: 1024, height: 768 },
+      scroll: { x: 0, y: 0, width: 1024, height: 768 },
+    }] as never);
+
+    // Настроить reverseIdMap: длинные ID → короткие ID
+    const reverseIdMap = new Map<string, string>([
+      ['div_0_0_0', 'div_0'],
+      ['span_1_0_1', 'txt_0'],
+    ]);
+    mockSession.getReverseIdMap.mockReturnValue(reverseIdMap);
+
+    // Настроить getSnapshot чтобы возвращал документ с длинными ID
+    mockSession.getSnapshot.mockReturnValue({
+      canvas: { url: 'https://spa.example.com', viewport: { width: 1024, height: 768 } },
+      objects: [
+        { id: 'div_0_0_0', t: 'container', p: [0, 0], s: [1024, 768] },
+        { id: 'span_1_0_1', t: 'text', p: [10, 10], s: [100, 20] },
+      ],
+    } as never);
+
+    const result = await handleReadPage(
+      { url: 'https://spa.example.com' },
+      mockBrowser,
+      mockSession,
+      mockConfig,
+    );
+
+    expect(result.status).toBe('success');
+    expect(result.data?.mode).toBe('render');
+    expect(result.data?.vslDocument).toBeDefined();
+
+    // Проверить что vslDocument содержит короткие ID
+    const vslDoc = result.data?.vslDocument as { objects?: Array<{ id: string }> };
+    expect(vslDoc?.objects).toBeDefined();
+    expect(vslDoc?.objects?.[0]?.id).toBe('div_0');
+    expect(vslDoc?.objects?.[1]?.id).toBe('txt_0');
   });
 });

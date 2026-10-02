@@ -58,27 +58,35 @@ const DIFF: VslDiff = {
 };
 
 describe('VALID_ACTIONS / TARGET_ACTIONS', () => {
-  it('24 действия §7.1–7.3, без дубликатов', () => {
-    expect(VALID_ACTIONS).toHaveLength(24);
-    expect(new Set(VALID_ACTIONS).size).toBe(24);
+  it('28 действий §7.1–7.3, без дубликатов', () => {
+    expect(VALID_ACTIONS).toHaveLength(28);
+    expect(new Set(VALID_ACTIONS).size).toBe(28);
     expect(VALID_ACTIONS).toContain('click');
     expect(VALID_ACTIONS).toContain('type');
+    expect(VALID_ACTIONS).toContain('fill'); // алиас type (MCP parity)
+    expect(VALID_ACTIONS).toContain('press'); // нажатие клавиши (MCP parity)
+    expect(VALID_ACTIONS).toContain('upload'); // загрузка файлов (MCP parity)
     expect(VALID_ACTIONS).toContain('scroll');
     expect(VALID_ACTIONS).toContain('navigate');
     expect(VALID_ACTIONS).toContain('go_back');
     expect(VALID_ACTIONS).toContain('refresh');
+    expect(VALID_ACTIONS).toContain('clickCoordinates');
   });
 
-  it('TARGET_ACTIONS: 18 с целью; 6 действий без цели (§7.1–7.3)', () => {
-    expect(TARGET_ACTIONS.size).toBe(18);
+  it('TARGET_ACTIONS: 22 с целью; 6 действий без цели (§7.1–7.3)', () => {
+    expect(TARGET_ACTIONS.size).toBe(22);
     for (const action of ['scroll', 'wait', 'navigate', 'go_back', 'go_forward', 'refresh']) {
       expect(TARGET_ACTIONS.has(action)).toBe(false);
     }
     expect(TARGET_ACTIONS.has('click')).toBe(true);
     expect(TARGET_ACTIONS.has('type')).toBe(true);
+    expect(TARGET_ACTIONS.has('fill')).toBe(true); // алиас type
+    expect(TARGET_ACTIONS.has('press')).toBe(true); // нажатие клавиши
+    expect(TARGET_ACTIONS.has('upload')).toBe(true); // загрузка файлов
     expect(TARGET_ACTIONS.has('submit')).toBe(true);
     expect(TARGET_ACTIONS.has('drag')).toBe(true);
     expect(TARGET_ACTIONS.has('download')).toBe(true);
+    expect(TARGET_ACTIONS.has('clickCoordinates')).toBe(true);
   });
 });
 

@@ -7,6 +7,7 @@ import { handleExecuteAction } from './executeAction.js';
 import type { BrowserManager } from '../browser/manager.js';
 import type { ServerSession } from '../session/serverSession.js';
 
+const TEST_SESSION_ID = 'test-session-id';
 describe('vsl_execute_action', () => {
   let mockBrowser: jest.Mocked<BrowserManager>;
   let mockSession: jest.Mocked<ServerSession>;
@@ -14,22 +15,32 @@ describe('vsl_execute_action', () => {
     click: jest.Mock;
     fill: jest.Mock;
     waitForTimeout: jest.Mock;
+    waitForLoadState: jest.Mock;
+    url: jest.Mock;
     keyboard: { press: jest.Mock };
     locator: jest.Mock;
+    evaluate: jest.Mock;
   };
 
   beforeEach(() => {
     mockPage = {
-      click: jest.fn().mockResolvedValue(undefined),
-      fill: jest.fn().mockResolvedValue(undefined),
-      waitForTimeout: jest.fn().mockResolvedValue(undefined),
-      keyboard: { press: jest.fn().mockResolvedValue(undefined) },
-      locator: jest.fn().mockImplementation(() => ({
-        click: jest.fn().mockResolvedValue(undefined),
-        fill: jest.fn().mockResolvedValue(undefined),
-        setInputFiles: jest.fn().mockResolvedValue(undefined),
+      click: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
+      fill: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
+      waitForTimeout: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
+      waitForLoadState: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
+      url: jest.fn<() => string>().mockReturnValue('https://example.com'),
+      keyboard: { press: jest.fn<() => Promise<void>>().mockResolvedValue(undefined) },
+      locator: jest.fn<() => { click: jest.Mock; fill: jest.Mock; setInputFiles: jest.Mock; check: jest.Mock; uncheck: jest.Mock; count: jest.Mock }>().mockImplementation(() => ({
+        click: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
+        fill: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
+        setInputFiles: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
+        check: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
+        uncheck: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
+        count: jest.fn<() => Promise<number>>().mockResolvedValue(1),
       })),
+      evaluate: jest.fn<() => Promise<{ exists: boolean; valid: boolean; actualTag: string }>>().mockResolvedValue({ exists: true, valid: true, actualTag: 'button' }),
     };
+
 
     mockBrowser = {
       isAvailable: jest.fn(),
@@ -37,7 +48,7 @@ describe('vsl_execute_action', () => {
       evaluate: jest.fn(),
       getContent: jest.fn(),
       screenshot: jest.fn(),
-      getPage: jest.fn().mockResolvedValue(mockPage),
+      getPage: jest.fn<() => Promise<typeof mockPage>>().mockResolvedValue(mockPage),
       launch: jest.fn(),
       close: jest.fn(),
       uploadFile: jest.fn(),
@@ -66,6 +77,11 @@ describe('vsl_execute_action', () => {
     mockBrowser.isAvailable.mockResolvedValue(true);
     mockBrowser.evaluate.mockResolvedValue(undefined);
     mockBrowser.navigate.mockResolvedValue(undefined);
+    // Дефолтный mock для getSnapshot — getStateAfterAction требует viewport
+    mockSession.getSnapshot.mockReturnValue({
+      canvas: { url: 'https://example.com', viewport: { width: 1024, height: 768 } },
+      objects: [],
+    } as never);
   });
 
   describe('валидация аргументов', () => {
@@ -74,6 +90,7 @@ describe('vsl_execute_action', () => {
         { action: '', target_id: 'button_0' },
         mockBrowser,
         mockSession,
+        TEST_SESSION_ID,
       );
 
       expect(result.status).toBe('error');
@@ -85,6 +102,7 @@ describe('vsl_execute_action', () => {
         { action: 'click', target_id: '' },
         mockBrowser,
         mockSession,
+        TEST_SESSION_ID,
       );
 
       expect(result.status).toBe('error');
@@ -102,6 +120,7 @@ describe('vsl_execute_action', () => {
         { action: 'unknown_action', target_id: 'button_0' },
         mockBrowser,
         mockSession,
+        TEST_SESSION_ID,
       );
 
       expect(result.status).toBe('error');
@@ -118,6 +137,7 @@ describe('vsl_execute_action', () => {
         { action: 'click', target_id: 'button_0', return_state: 'true' as unknown as boolean },
         mockBrowser,
         mockSession,
+        TEST_SESSION_ID,
       );
 
       expect(result.status).toBe('error');
@@ -133,6 +153,7 @@ describe('vsl_execute_action', () => {
         { action: 'click', target_id: 'button_0' },
         mockBrowser,
         mockSession,
+        TEST_SESSION_ID,
       );
 
       expect(result.status).toBe('error');
@@ -147,6 +168,7 @@ describe('vsl_execute_action', () => {
         { action: 'click', target_id: 'button_0' },
         mockBrowser,
         mockSession,
+        TEST_SESSION_ID,
       );
 
       expect(result.status).toBe('error');
@@ -187,10 +209,11 @@ describe('vsl_execute_action', () => {
         { action: 'click', target_id: 'button_0' },
         mockBrowser,
         mockSession,
+        TEST_SESSION_ID,
       );
 
       expect(result.status).toBe('success');
-      expect(mockBrowser.navigate).toHaveBeenCalledWith(snapshotUrl);
+      expect(mockBrowser.navigate).toHaveBeenCalledWith(snapshotUrl, TEST_SESSION_ID);
     });
 
     it('пропускает навигацию если URL совпадает с snapshot', async () => {
@@ -218,6 +241,7 @@ describe('vsl_execute_action', () => {
         { action: 'click', target_id: 'button_0' },
         mockBrowser,
         mockSession,
+        TEST_SESSION_ID,
       );
 
       expect(result.status).toBe('success');
@@ -230,22 +254,23 @@ describe('vsl_execute_action', () => {
       } as never);
 
       // snapshotUrl отсутствует → if (snapshotUrl) пропускает URL check
-      // 1. hasVslIds → true
-      // 2. стабилизация DOM → undefined
-      // 3. currentUrl → 'https://example.com'
-      // 4. extractDomTreeInBrowser → []
-      // 5. viewport → { width: 1024, height: 768 }
+      // 1. urlBeforeAction (строка 337) → 'https://example.com'
+      // 2. hasVslIds (строка 359) → true
+      // 3. DOM stabilization → undefined
+      // 4. extractDomTree в getStateAfterAction → extraction
+      // 5. injectVslIdsIntoDom → undefined
       mockBrowser.evaluate
+        .mockResolvedValueOnce('https://example.com' as never)
         .mockResolvedValueOnce(true as never)
         .mockResolvedValueOnce(undefined as never)
-        .mockResolvedValueOnce('https://example.com' as never)
-        .mockResolvedValueOnce([] as never)
-        .mockResolvedValueOnce({ width: 1024, height: 768 } as never);
+        .mockResolvedValueOnce([{ __type: 'extraction_result', elements: [], viewport: { width: 1024, height: 768 }, scroll: { x: 0, y: 0, width: 1024, height: 768 } }] as never)
+        .mockResolvedValueOnce(undefined as never);
 
       const result = await handleExecuteAction(
         { action: 'click', target_id: 'button_0' },
         mockBrowser,
         mockSession,
+        TEST_SESSION_ID,
       );
 
       expect(result.status).toBe('success');
@@ -258,22 +283,23 @@ describe('vsl_execute_action', () => {
       } as never);
 
       // snapshotUrl = '' → if (snapshotUrl) → false
-      // 1. hasVslIds → true
-      // 2. стабилизация DOM → undefined
-      // 3. currentUrl → 'https://example.com'
-      // 4. extractDomTreeInBrowser → []
-      // 5. viewport → { width: 1024, height: 768 }
+      // 1. urlBeforeAction (строка 337) → 'https://example.com'
+      // 2. hasVslIds (строка 359) → true
+      // 3. DOM stabilization → undefined
+      // 4. extractDomTree в getStateAfterAction → extraction
+      // 5. injectVslIdsIntoDom → undefined
       mockBrowser.evaluate
+        .mockResolvedValueOnce('https://example.com' as never)
         .mockResolvedValueOnce(true as never)
         .mockResolvedValueOnce(undefined as never)
-        .mockResolvedValueOnce('https://example.com' as never)
-        .mockResolvedValueOnce([] as never)
-        .mockResolvedValueOnce({ width: 1024, height: 768 } as never);
+        .mockResolvedValueOnce([{ __type: 'extraction_result', elements: [], viewport: { width: 1024, height: 768 }, scroll: { x: 0, y: 0, width: 1024, height: 768 } }] as never)
+        .mockResolvedValueOnce(undefined as never);
 
       const result = await handleExecuteAction(
         { action: 'click', target_id: 'button_0' },
         mockBrowser,
         mockSession,
+        TEST_SESSION_ID,
       );
 
       expect(result.status).toBe('success');
@@ -302,6 +328,7 @@ describe('vsl_execute_action', () => {
         { action: 'click', target_id: 'button_0' },
         mockBrowser,
         mockSession,
+        TEST_SESSION_ID,
       );
 
       expect(result.status).toBe('success');
@@ -319,6 +346,7 @@ describe('vsl_execute_action', () => {
         { action: 'click', target_id: 'btn_a3' },
         mockBrowser,
         mockSession,
+        TEST_SESSION_ID,
       );
 
       expect(result.status).toBe('success');
@@ -335,6 +363,7 @@ describe('vsl_execute_action', () => {
         { action: 'type', target_id: 'input_0', value: 'test text' },
         mockBrowser,
         mockSession,
+        TEST_SESSION_ID,
       );
 
       expect(result.status).toBe('success');
@@ -347,6 +376,7 @@ describe('vsl_execute_action', () => {
         { action: 'fill', target_id: 'input_0', value: 'test text' },
         mockBrowser,
         mockSession,
+        TEST_SESSION_ID,
       );
 
       expect(result.status).toBe('success');
@@ -359,6 +389,7 @@ describe('vsl_execute_action', () => {
         { action: 'fill', target_id: 'input_0' },
         mockBrowser,
         mockSession,
+        TEST_SESSION_ID,
       );
 
       expect(result.status).toBe('error');
@@ -370,6 +401,7 @@ describe('vsl_execute_action', () => {
         { action: 'type', target_id: 'input_0' },
         mockBrowser,
         mockSession,
+        TEST_SESSION_ID,
       );
 
       expect(result.status).toBe('error');
@@ -380,6 +412,7 @@ describe('vsl_execute_action', () => {
         { action: 'press', target_id: 'input_0', value: 'Enter' },
         mockBrowser,
         mockSession,
+        TEST_SESSION_ID,
       );
       expect(result.status).toBe('success');
       expect(result.data?.action).toBe('press');
@@ -391,6 +424,7 @@ describe('vsl_execute_action', () => {
         { action: 'press', target_id: 'input_0' },
         mockBrowser,
         mockSession,
+        TEST_SESSION_ID,
       );
       expect(result.status).toBe('error');
       expect(result.error).toContain('value is required for press action');
@@ -401,6 +435,7 @@ describe('vsl_execute_action', () => {
         { action: 'press', target_id: 'input_0', value: 'Tab' },
         mockBrowser,
         mockSession,
+        TEST_SESSION_ID,
       );
       expect(result.status).toBe('success');
       expect(mockPage.keyboard.press).toHaveBeenCalledWith('Tab', { delay: 0 });
@@ -411,6 +446,7 @@ describe('vsl_execute_action', () => {
         { action: 'press', target_id: 'input_0', value: 'Escape' },
         mockBrowser,
         mockSession,
+        TEST_SESSION_ID,
       );
       expect(result.status).toBe('success');
       expect(mockPage.keyboard.press).toHaveBeenCalledWith('Escape', { delay: 0 });
@@ -422,6 +458,7 @@ describe('vsl_execute_action', () => {
         { action: 'scroll', target_id: 'page', value: 'down' },
         mockBrowser,
         mockSession,
+        TEST_SESSION_ID,
       );
 
       expect(result.status).toBe('success');
@@ -434,6 +471,7 @@ describe('vsl_execute_action', () => {
         { action: 'scroll', target_id: 'page' },
         mockBrowser,
         mockSession,
+        TEST_SESSION_ID,
       );
 
       expect(result.status).toBe('success');
@@ -445,6 +483,7 @@ describe('vsl_execute_action', () => {
         { action: 'scroll', target_id: 'page', value: 'left' },
         mockBrowser,
         mockSession,
+        TEST_SESSION_ID,
       );
       expect(result.status).toBe('success');
       expect(mockBrowser.evaluate).toHaveBeenCalled();
@@ -455,6 +494,7 @@ describe('vsl_execute_action', () => {
         { action: 'scroll', target_id: 'page', value: 'right' },
         mockBrowser,
         mockSession,
+        TEST_SESSION_ID,
       );
       expect(result.status).toBe('success');
       expect(mockBrowser.evaluate).toHaveBeenCalled();
@@ -465,6 +505,7 @@ describe('vsl_execute_action', () => {
         { action: 'scroll', target_id: 'page', value: 'down:300' },
         mockBrowser,
         mockSession,
+        TEST_SESSION_ID,
       );
       expect(result.status).toBe('success');
       expect(mockBrowser.evaluate).toHaveBeenCalled();
@@ -475,6 +516,7 @@ describe('vsl_execute_action', () => {
         { action: 'scroll', target_id: 'page', value: 'diagonal' },
         mockBrowser,
         mockSession,
+        TEST_SESSION_ID,
       );
       expect(result.status).toBe('error');
       expect(result.error).toContain('Invalid scroll direction');
@@ -485,6 +527,7 @@ describe('vsl_execute_action', () => {
         { action: 'scroll', target_id: 'page', value: 'down:abc' },
         mockBrowser,
         mockSession,
+        TEST_SESSION_ID,
       );
       expect(result.status).toBe('error');
       expect(result.error).toContain('Invalid scroll amount');
@@ -495,6 +538,7 @@ describe('vsl_execute_action', () => {
         { action: 'scroll', target_id: 'page', value: 'down:300:extra' },
         mockBrowser,
         mockSession,
+        TEST_SESSION_ID,
       );
       expect(result.status).toBe('error');
       expect(result.error).toContain('Invalid scroll value format');
@@ -520,6 +564,7 @@ describe('vsl_execute_action', () => {
         { action: 'scroll', target_id: 'page', value: 'down:300' },
         mockBrowser,
         mockSession,
+        TEST_SESSION_ID,
       );
 
       expect(result.status).toBe('success');
@@ -553,6 +598,7 @@ describe('vsl_execute_action', () => {
         { action: 'scroll', target_id: 'page', value: 'down:300' },
         mockBrowser,
         mockSession,
+        TEST_SESSION_ID,
       );
       expect(result.status).toBe('success');
       // Фолбэк: старый контекст + дельта с клампом (300 <= 1000-100)
@@ -564,6 +610,7 @@ describe('vsl_execute_action', () => {
         { action: 'scroll', target_id: 'page', value: 'down', return_state: false },
         mockBrowser,
         mockSession,
+        TEST_SESSION_ID,
       );
       expect(result.status).toBe('success');
       expect(result.data?.state).toBeUndefined();
@@ -575,6 +622,7 @@ describe('vsl_execute_action', () => {
         { action: 'select', target_id: 'select_0', value: 'option1' },
         mockBrowser,
         mockSession,
+        TEST_SESSION_ID,
       );
 
       expect(result.status).toBe('success');
@@ -587,6 +635,7 @@ describe('vsl_execute_action', () => {
         { action: 'select', target_id: 'select_0' },
         mockBrowser,
         mockSession,
+        TEST_SESSION_ID,
       );
 
       expect(result.status).toBe('error');
@@ -598,6 +647,7 @@ describe('vsl_execute_action', () => {
         { action: 'hover', target_id: 'button_0' },
         mockBrowser,
         mockSession,
+        TEST_SESSION_ID,
       );
 
       expect(result.status).toBe('success');
@@ -610,6 +660,7 @@ describe('vsl_execute_action', () => {
         { action: 'focus', target_id: 'input_0' },
         mockBrowser,
         mockSession,
+        TEST_SESSION_ID,
       );
 
       expect(result.status).toBe('success');
@@ -622,6 +673,7 @@ describe('vsl_execute_action', () => {
         { action: 'blur', target_id: 'input_0' },
         mockBrowser,
         mockSession,
+        TEST_SESSION_ID,
       );
 
       expect(result.status).toBe('success');
@@ -634,6 +686,7 @@ describe('vsl_execute_action', () => {
         { action: 'upload', target_id: 'input_0', value: '/tmp/test.txt' },
         mockBrowser,
         mockSession,
+        TEST_SESSION_ID,
       );
 
       expect(result.status).toBe('success');
@@ -647,7 +700,8 @@ describe('vsl_execute_action', () => {
       });
       // Проверяем, что locator().setInputFiles() вызван
       expect(mockPage.locator).toHaveBeenCalled();
-      const locatorResult = mockPage.locator.mock.results[0].value;
+      // locator() вызывается дважды: count() и setInputFiles()
+      const locatorResult = mockPage.locator.mock.results[1].value as { setInputFiles: jest.Mock };
       expect(locatorResult.setInputFiles).toHaveBeenCalled();
     });
 
@@ -656,14 +710,15 @@ describe('vsl_execute_action', () => {
         { action: 'upload', target_id: 'input_0', value: '/tmp/a.txt, /tmp/b.txt' },
         mockBrowser,
         mockSession,
+        TEST_SESSION_ID,
       );
 
       expect(result.status).toBe('success');
       expect(result.data?.upload?.files).toEqual(['/tmp/a.txt', '/tmp/b.txt']);
       // Проверяем, что locator().setInputFiles() вызван с массивом файлов
       expect(mockPage.locator).toHaveBeenCalled();
-      const locatorResult = mockPage.locator.mock.results[0].value;
-      expect(locatorResult.setInputFiles).toHaveBeenCalledWith(['/tmp/a.txt', '/tmp/b.txt']);
+      const locatorResult = mockPage.locator.mock.results[1].value as { setInputFiles: jest.Mock };
+      expect(locatorResult.setInputFiles).toHaveBeenCalledWith(['/tmp/a.txt', '/tmp/b.txt'], { timeout: 1000 });
     });
 
     it('возвращает ошибку для upload без value', async () => {
@@ -671,6 +726,7 @@ describe('vsl_execute_action', () => {
         { action: 'upload', target_id: 'input_0' },
         mockBrowser,
         mockSession,
+        TEST_SESSION_ID,
       );
 
       expect(result.status).toBe('error');
@@ -682,6 +738,7 @@ describe('vsl_execute_action', () => {
         { action: 'upload', target_id: 'input_0', value: '   ' },
         mockBrowser,
         mockSession,
+        TEST_SESSION_ID,
       );
 
       expect(result.status).toBe('error');
@@ -689,17 +746,20 @@ describe('vsl_execute_action', () => {
     });
 
     it('обрабатывает ошибку uploadFile', async () => {
-      // Настраиваем locator().setInputFiles() на выброс ошибки
-      mockPage.locator.mockImplementationOnce(() => ({
-        click: jest.fn().mockResolvedValue(undefined),
-        fill: jest.fn().mockResolvedValue(undefined),
-        setInputFiles: jest.fn().mockRejectedValue(new Error('Path traversal detected')),
+      // mockImplementation покрывает все вызовы locator() в этом тесте
+      mockPage.locator.mockImplementation(() => ({
+        click: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
+        fill: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
+        setInputFiles: jest.fn<() => Promise<void>>().mockRejectedValue(new Error('Path traversal detected')),
+        check: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
+        uncheck: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
+        count: jest.fn<() => Promise<number>>().mockResolvedValue(1),
       }));
-
       const result = await handleExecuteAction(
         { action: 'upload', target_id: 'input_0', value: '../../../etc/passwd' },
         mockBrowser,
         mockSession,
+        TEST_SESSION_ID,
       );
 
       expect(result.status).toBe('error');
@@ -707,15 +767,16 @@ describe('vsl_execute_action', () => {
       expect(result.error).toContain('Path traversal detected');
     });
 
-    it('возвращает ошибку для не реализованного действия (check, uncheck, press)', async () => {
+    it('возвращает ошибку для drag без value', async () => {
       const result = await handleExecuteAction(
-        { action: 'check', target_id: 'checkbox_0' },
+        { action: 'drag', target_id: 'div_0' },
         mockBrowser,
         mockSession,
+        TEST_SESSION_ID,
       );
 
       expect(result.status).toBe('error');
-      expect(result.error).toContain('Action check is not yet implemented');
+      expect(result.error).toContain('value is required for drag action');
     });
   });
 
@@ -735,6 +796,7 @@ describe('vsl_execute_action', () => {
         { action: 'click', target_id: 'button_0' },
         mockBrowser,
         mockSession,
+        TEST_SESSION_ID,
       );
 
       expect(result.status).toBe('error');
@@ -749,6 +811,7 @@ describe('vsl_execute_action', () => {
         { action: 'click', target_id: 'button_0' },
         mockBrowser,
         mockSession,
+        TEST_SESSION_ID,
       );
 
       expect(result.status).toBe('error');
@@ -779,6 +842,7 @@ describe('vsl_execute_action', () => {
         { action: 'click', target_id: 'button_0', return_state: false },
         mockBrowser,
         mockSession,
+        TEST_SESSION_ID,
       );
 
       expect(result.status).toBe('success');
@@ -786,26 +850,28 @@ describe('vsl_execute_action', () => {
     });
 
     it('возвращает diff в state при return_state=true (default)', async () => {
-      const mockElements = [{ id: 'test', type: 'button' }];
+      const mockElements = [{ id: 'test', type: 'button', attributes: { 'data-vsl-id': 'btn_0' } }];
       // 1. URL check → 'https://example.com' (совпадает, не навигирует)
       // 2. hasVslIds → true
       // 3. click → page.click (не evaluate)
       // 4. page.waitForTimeout (не evaluate)
       // 5. стабилизация DOM (setTimeout 100ms) → undefined
-      // 6. currentUrl → 'https://example.com'
+      // 6. urlAfterAction = page.url() (не evaluate)
       // 7. getStateAfterAction: extractDomTree → обёртка
       // 8. injectVslIdsIntoDom → undefined
       mockBrowser.evaluate
         .mockResolvedValueOnce('https://example.com' as never)
         .mockResolvedValueOnce(true as never)
         .mockResolvedValueOnce(undefined as never)
-        .mockResolvedValueOnce('https://example.com' as never)
         .mockResolvedValueOnce([{ __type: 'extraction_result', elements: mockElements, viewport: { width: 1024, height: 768 }, scroll: { x: 0, y: 0, width: 1024, height: 768 } }] as never)
         .mockResolvedValueOnce(undefined as never);
 
       mockSession.getDiff.mockReturnValue({
+        diff_version: 1,
+        base_version: 0,
+        timestamp: Date.now(),
         changes: { added: [], modified: [], removed: [], unchanged_refs: [] },
-      });
+      } as never);
       // Документ с viewport и objects — единый пайплайн отдачи (АС[3])
       // фильтрует по видимому окну и требует полную структуру документа
       mockSession.getSnapshot.mockReturnValue({
@@ -817,6 +883,7 @@ describe('vsl_execute_action', () => {
         { action: 'click', target_id: 'button_0' },
         mockBrowser,
         mockSession,
+        TEST_SESSION_ID,
       );
 
       expect(result.status).toBe('success');
@@ -845,6 +912,7 @@ describe('vsl_execute_action', () => {
         { action: 'click', target_id: 'button_0', return_state: true },
         mockBrowser,
         mockSession,
+        TEST_SESSION_ID,
       );
 
       expect(result.status).toBe('success');
@@ -883,7 +951,12 @@ describe('vsl_execute_action', () => {
         .mockResolvedValueOnce([{ __type: 'extraction_result', elements: mockElements, viewport: { width: 1024, height: 768 }, scroll: { x: 0, y: 0, width: 1024, height: 768 } }] as never)
         .mockResolvedValueOnce(undefined as never);
 
-      mockSession.getDiff.mockReturnValue({ changes: { added: [], modified: [], removed: [], unchanged_refs: [] } });
+      mockSession.getDiff.mockReturnValue({
+        diff_version: 1,
+        base_version: 0,
+        timestamp: Date.now(),
+        changes: { added: [], modified: [], removed: [], unchanged_refs: [] },
+      } as never);
       mockSession.getSnapshot.mockReturnValue({
         canvas: { url: 'https://example.com', viewport: { width: 1024, height: 768 } },
         objects: [],
@@ -893,6 +966,7 @@ describe('vsl_execute_action', () => {
         { action: 'click', target_id: 'button_0' },
         mockBrowser,
         mockSession,
+        TEST_SESSION_ID,
       );
 
       expect(result.status).toBe('success');
@@ -912,11 +986,15 @@ describe('vsl_execute_action', () => {
         .mockResolvedValueOnce('https://example.com' as never)
         .mockResolvedValueOnce(true as never)
         .mockResolvedValueOnce(undefined as never)
-        .mockResolvedValueOnce('https://example.com' as never)
         .mockResolvedValueOnce([{ __type: 'extraction_result', elements: [], viewport: { width: 1024, height: 768 }, scroll: { x: 0, y: 0, width: 1024, height: 768 } }] as never)
         .mockResolvedValueOnce(undefined as never);
 
-      mockSession.getDiff.mockReturnValue({ changes: { added: [], modified: [], removed: [], unchanged_refs: [] } });
+      mockSession.getDiff.mockReturnValue({
+        diff_version: 1,
+        base_version: 0,
+        timestamp: Date.now(),
+        changes: { added: [], modified: [], removed: [], unchanged_refs: [] },
+      } as never);
       mockSession.getSnapshot.mockReturnValue({
         canvas: { url: 'https://example.com', viewport: { width: 1024, height: 768 } },
         objects: [],
@@ -926,6 +1004,7 @@ describe('vsl_execute_action', () => {
         { action: 'click', target_id: 'button_0' },
         mockBrowser,
         mockSession,
+        TEST_SESSION_ID,
       );
 
       expect(result.status).toBe('success');
@@ -946,6 +1025,7 @@ describe('vsl_execute_action', () => {
         { action: 'click', target_id: 'button_0' },
         mockBrowser,
         mockSession,
+        TEST_SESSION_ID,
       );
 
       expect(result.status).toBe('error');
@@ -982,6 +1062,7 @@ describe('vsl_execute_action', () => {
         { action: 'download', target_id: 'link_0', return_state: false },
         mockBrowser,
         mockSession,
+        TEST_SESSION_ID,
       );
 
       expect(result.status).toBe('success');
@@ -1014,6 +1095,7 @@ describe('vsl_execute_action', () => {
         },
         mockBrowser,
         mockSession,
+        TEST_SESSION_ID,
       );
 
       expect(result.status).toBe('success');
@@ -1036,6 +1118,7 @@ describe('vsl_execute_action', () => {
           { action: 'download', target_id: 'link_0', return_state: false },
           mockBrowser,
           mockSession,
+          TEST_SESSION_ID,
         );
 
         expect(result.status).toBe('error');

@@ -4,7 +4,7 @@
  */
 import { ARIA_ROLE_TYPE_MAP, resolveAriaRoleType, resolveSt } from './level2';
 import { isAriaHidden, segmentTree, type SegmentedElement } from './segmenter';
-import { extractDomTree } from '../capture/domExtractor';
+import { extractDomTree, type ExtractedElement } from '../capture/domExtractor';
 
 describe('ARIA_ROLE_TYPE_MAP', () => {
   it('содержит ровно 9 контракных ролей', () => {
@@ -74,6 +74,10 @@ describe('isAriaHidden', () => {
     expect(isAriaHidden({ 'aria-hidden': 'true' })).toBe(true);
     expect(isAriaHidden({ 'aria-hidden': 'false' })).toBe(false);
     expect(isAriaHidden({})).toBe(false);
+  });
+
+  it('undefined attributes не вызывает TypeError (защитная проверка)', () => {
+    expect(isAriaHidden(undefined)).toBe(false);
   });
 });
 
@@ -181,5 +185,25 @@ describe('segmentTree (интеграция L1+L2 через extractDomTree)', (
       'image',
     ]);
     expect(typed.length / all.length).toBeGreaterThanOrEqual(0.6);
+  });
+
+  it('пропускает элементы без attributes (защитная проверка от TypeError)', () => {
+    // Имитируем ситуацию, когда extractDomTreeInBrowser возвращает элемент без attributes
+    // (например, из-за ошибки сериализации через browser.evaluate())
+    const malformedElements = [
+      { tag: 'div', indexPath: [0], rect: { x: 0, y: 0, width: 100, height: 50 }, text: 'valid', attributes: {}, css: {}, children: [] },
+      { tag: 'span', indexPath: [1], rect: { x: 0, y: 0, width: 50, height: 20 }, text: 'malformed', css: {}, children: [] }, // нет attributes!
+      { tag: 'button', indexPath: [2], rect: { x: 0, y: 0, width: 80, height: 32 }, text: 'also valid', attributes: {}, css: {}, children: [] },
+    ] as unknown as ExtractedElement[];
+
+    // Подавляем console.warn во время теста
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const result = segmentTree(malformedElements);
+    warnSpy.mockRestore();
+
+    // Должны быть обработаны только валидные элементы (2 из 3)
+    expect(result).toHaveLength(2);
+    expect(result[0]!.tag).toBe('div');
+    expect(result[1]!.tag).toBe('button');
   });
 });

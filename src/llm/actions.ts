@@ -13,13 +13,14 @@ import { LlmValidationError } from './types';
 import type { LlmAction, VslInput } from './types';
 
 /**
- * Канонический список действий Action Model (§7.1–7.3) — 24 действия:
- * базовые (10) + расширенные (9) + навигационные (4) + download (1).
+ * Канонический список действий Action Model (§7.1–7.3) — 28 действий:
+ * базовые (12) + расширенные (11) + навигационные (4) + download (1).
  */
 export const VALID_ACTIONS = [
   // §7.1 Базовые
   'click',
   'type',
+  'fill', // алиас type (MCP parity)
   'clear',
   'scroll',
   'hover',
@@ -28,6 +29,8 @@ export const VALID_ACTIONS = [
   'select',
   'check',
   'uncheck',
+  'press', // нажатие клавиши (MCP parity)
+  'clickCoordinates',
   // §7.2 Расширенные
   'drag',
   'drop',
@@ -38,6 +41,7 @@ export const VALID_ACTIONS = [
   'expand',
   'collapse',
   'wait',
+  'upload', // загрузка файлов (MCP parity)
   // §7.3 Навигационные
   'navigate',
   'go_back',
@@ -57,6 +61,7 @@ export type ValidAction = (typeof VALID_ACTIONS)[number];
 export const TARGET_ACTIONS: ReadonlySet<string> = new Set([
   'click',
   'type',
+  'fill', // алиас type
   'clear',
   'hover',
   'focus',
@@ -64,6 +69,7 @@ export const TARGET_ACTIONS: ReadonlySet<string> = new Set([
   'select',
   'check',
   'uncheck',
+  'press', // нажатие клавиши
   'drag',
   'drop',
   'submit',
@@ -72,7 +78,9 @@ export const TARGET_ACTIONS: ReadonlySet<string> = new Set([
   'close',
   'expand',
   'collapse',
+  'upload', // загрузка файлов
   'download',
+  'clickCoordinates',
 ]);
 
 const collectFromObjects = (objects: readonly VslObject[], ids: Set<string>): void => {

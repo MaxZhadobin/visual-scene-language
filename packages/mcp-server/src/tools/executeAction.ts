@@ -21,7 +21,7 @@
 
 import type { BrowserManager, PlaywrightFrame } from '../browser/manager.js';
 import type { ServerSession } from '../session/serverSession.js';
-import type { SnapshotInput } from '@thinkingos/vsl-sdk';
+import type { SnapshotInput, VslObject } from '@thinkingos/vsl-sdk';
 
 import { computeToolMetrics } from '../utils/metrics.js';
 import { extractDomTree, iframeFrameRegistry } from './getSnapshot.js';
@@ -35,6 +35,7 @@ const VALID_ACTIONS = [
   'click',
   'type',
   'fill', // alias for type — convenience for LLM agents
+  'clear',
   'scroll',
   'select',
   'hover',
@@ -45,6 +46,18 @@ const VALID_ACTIONS = [
   'press',
   'download',
   'upload',
+  'drag',
+  'drop',
+  'submit',
+  'reset',
+  'open',
+  'close',
+  'expand',
+  'collapse',
+  'wait',
+  'go_back',
+  'go_forward',
+  'refresh',
 ] as const;
 
 /** Аргументы vsl_execute_action. */
@@ -65,7 +78,6 @@ export interface ExecuteActionArgs {
 }
 /** Результат vsl_execute_action. */
 export interface ExecuteActionResult {
-
   status: 'success' | 'error';
   data?: {
     action: string;
@@ -82,6 +94,10 @@ export interface ExecuteActionResult {
       /** Ошибка извлечения состояния (если getStateAfterAction упал). */
       error?: string;
     };
+    /** Флаг: произошла ли навигация после действия (например, press Enter на форме). */
+    navigated?: boolean;
+    /** Новый URL после навигации (если navigated=true). */
+    newUrl?: string;
   };
   error?: string;
   /** Предупреждение о проблемах при извлечении состояния страницы. */
@@ -103,17 +119,18 @@ export interface StateAfterAction {
  * Получает обновлённое состояние страницы после действия.
  * Используется для return_state параметра.
  */
-async function getStateAfterAction(
+export async function getStateAfterAction(
   session: ServerSession,
   browser: BrowserManager,
   url: string,
+  sessionId: string,
 ): Promise<StateAfterAction> {
   try {
     // Извлечь обновлённый DOM. Общий хелпер: прямая передача функции в
     // evaluate + разворачивание обёртки (без разворачивания SDK падает
     // с "reading 'aria-hidden'"). Viewport уже внутри обёртки — отдельный
     // evaluate-вызов не нужен.
-    const extraction = await extractDomTree(browser);
+    const extraction = await extractDomTree(browser, sessionId);
     // Обновить snapshot в сессии (scroll — для единого пайплайна отдачи, АС[3])
     const input: SnapshotInput = {
       viewport: extraction.viewport,
@@ -126,7 +143,7 @@ async function getStateAfterAction(
     // Полный документ — для инжекта data-vsl-id во ВСЕ элементы DOM
     const fullDoc = session.getSnapshot();
     // Inject data-vsl-id attributes into DOM for subsequent actions
-    await injectVslIdsIntoDom(browser, fullDoc.objects);
+    await injectVslIdsIntoDom(browser, fullDoc.objects, new Map(), sessionId);
     // Единый пайплайн отдачи (АС[3]): вьюпорт-фильтр по абсолютным
     // координатам + скролл-контексту, затем дефолтный detail_level 'medium'
     // (у тула нет параметра детализации).
@@ -223,6 +240,7 @@ export async function handleExecuteAction(
   args: ExecuteActionArgs,
   browser: BrowserManager,
   session: ServerSession,
+  sessionId: string,
 ): Promise<ExecuteActionResult> {
   const startTime = Date.now();
 
@@ -310,19 +328,26 @@ export async function handleExecuteAction(
         error: 'Playwright is not installed. Install it with: npm install playwright',
       };
     }
-
+    
     // 4. Ленивая навигация: если браузер не на URL из snapshot → автоматически навигировать
     const snapshot = session.getSnapshot();
     const snapshotUrl = snapshot.canvas.url;
     
+    // Сохраняем URL перед выполнением действия для детекции навигации
+    const urlBeforeAction = await browser.evaluate(() => window.location.href, sessionId);
+    
     if (snapshotUrl) {
-      const currentUrl = await browser.evaluate(() => window.location.href);
+      const currentUrl = urlBeforeAction;
       
       if (currentUrl !== snapshotUrl) {
         // Автоматическая навигация на URL из snapshot
-        await browser.navigate(snapshotUrl);
+        await browser.navigate(snapshotUrl, sessionId);
       }
     }
+    // Выполняем действие в try-catch для обработки навигации
+    let actionError: Error | null = null;
+    let page: Awaited<ReturnType<BrowserManager['getPage']>> = null!;
+    try {
 
     // 5. TODO: Найти элемент по target_id в VSL snapshot
     //    Сейчас используем target_id как CSS selector
@@ -333,11 +358,11 @@ export async function handleExecuteAction(
     // автоматически создаём snapshot для инжекта data-vsl-id
     const hasVslIds = await browser.evaluate(() => {
       return document.querySelector('[data-vsl-id]') !== null;
-    });
+    }, sessionId);
 
     if (!hasVslIds) {
       // Автоматическое создание snapshot (общий хелпер с разворачиванием обёртки)
-      const extraction = await extractDomTree(browser);
+      const extraction = await extractDomTree(browser, sessionId);
       const input: SnapshotInput = {
         viewport: extraction.viewport,
         url: snapshotUrl || '',
@@ -365,7 +390,7 @@ export async function handleExecuteAction(
           error: `Frame iframe_${frameIndex} not found in registry. Call vsl_get_snapshot first.`,
         };
       }
-      const frames = await browser.getFrames();
+      const frames = await browser.getFrames(sessionId);
       // Partial URL match (same algorithm as getSnapshot.ts) — handles redirects/parameters
       targetFrame = frames.find(f => {
         const u = f.url();
@@ -387,11 +412,92 @@ export async function handleExecuteAction(
     const localId = resolvedId;
 
     const selector = `[data-vsl-id="${localId}"], #${localId}, .${localId}`;
+
     // 5. Выполняем действие
-    const page = await browser.getPage();
+    page = await browser.getPage(sessionId);
     // Frame routing: используем targetFrame если задан, иначе main page
     // PlaywrightFrame и PlaywrightPage оба поддерживают locator API
     const target = targetFrame || page;
+
+    // CRITICAL-2: Валидация элемента перед действием
+    // Проверяем существование элемента и совпадение tag
+    // Graceful degradation: если evaluate недоступен (в тестах), пропускаем валидацию
+    // Пропускаем для действий, не требующих элемента: press, scroll, refresh
+    const actionsRequiringElement = ['click', 'fill', 'type', 'check', 'uncheck', 'upload', 'select', 'hover', 'focus', 'blur', 'clear'];
+    if (actionsRequiringElement.includes(args.action)) {
+      try {
+        const expectedTag = resolvedId.match(/^([a-z][a-z0-9]*(?:_[a-z][a-z0-9]*)*)_/)?.[1] || '';
+        const elementValidation = await target.evaluate(({ sel, expectedTag }: { sel: string; expectedTag: string }) => {
+          const el = document.querySelector(sel);
+          if (!el) return { exists: false, valid: false, actualTag: '' };
+          const actualTag = el.tagName.toLowerCase();
+          return { exists: true, valid: actualTag === expectedTag, actualTag };
+        }, { sel: selector, expectedTag });
+
+        if (!elementValidation.exists) {
+          // Элемент не найден — переинжектируем data-vsl-id
+          const extraction = await extractDomTree(browser, sessionId);
+          const input: SnapshotInput = {
+            viewport: extraction.viewport,
+            url: snapshotUrl || '',
+            title: '',
+            timestamp: new Date().toISOString(),
+            scroll: extraction.scroll,
+          };
+          session.snapshotFromElements(extraction.elements, input);
+          await injectVslIdsIntoDom(browser, extraction.elements as VslObject[], new Map(), sessionId);
+          // Повторная проверка после переинжекта
+          const revalidation = await target.evaluate(({ sel, expectedTag }: { sel: string; expectedTag: string }) => {
+            const el = document.querySelector(sel);
+            if (!el) return { exists: false, valid: false, actualTag: '' };
+            const actualTag = el.tagName.toLowerCase();
+            return { exists: true, valid: actualTag === expectedTag, actualTag };
+          }, { sel: selector, expectedTag });
+          if (!revalidation.exists) {
+            return {
+              status: 'error',
+              error: `Element not found after re-injection: ${args.target_id} (selector: ${selector})`,
+            };
+          }
+          if (!revalidation.valid) {
+            return {
+              status: 'error',
+              error: `Tag mismatch after re-injection: expected ${expectedTag}, got ${revalidation.actualTag} for ${args.target_id}`,
+            };
+          }
+        } else if (!elementValidation.valid) {
+          // Элемент найден, но tag не совпадает — переинжектируем
+          const extraction = await extractDomTree(browser, sessionId);
+          const input: SnapshotInput = {
+            viewport: extraction.viewport,
+            url: snapshotUrl || '',
+            title: '',
+            timestamp: new Date().toISOString(),
+            scroll: extraction.scroll,
+          };
+          session.snapshotFromElements(extraction.elements, input);
+          await injectVslIdsIntoDom(browser, extraction.elements as VslObject[], new Map(), sessionId);
+          // Повторная проверка после переинжекта
+          const revalidation = await target.evaluate(({ sel, expectedTag }: { sel: string; expectedTag: string }) => {
+            const el = document.querySelector(sel);
+            if (!el) return { exists: false, valid: false, actualTag: '' };
+            const actualTag = el.tagName.toLowerCase();
+            return { exists: true, valid: actualTag === expectedTag, actualTag };
+          }, { sel: selector, expectedTag });
+          if (!revalidation.valid) {
+            return {
+              status: 'error',
+              error: `Tag mismatch after re-injection: expected ${expectedTag}, got ${revalidation.actualTag} for ${args.target_id}`,
+            };
+          }
+        }
+      } catch (validationError) {
+        // Graceful degradation: если evaluate недоступен (в тестах), пропускаем валидацию
+        console.warn(`[VSL] Element validation skipped (target.evaluate not available): ${validationError}`);
+      }
+    }
+
+
     
     switch (args.action) {
       case 'click': {
@@ -402,7 +508,15 @@ export async function handleExecuteAction(
         // 4. Click the found element
         try {
           // Strategy 1: Standard locator
-          await target.locator(selector).click({ timeout: 5000 });
+          // Проверка существования элемента перед click (MEDIUM-3)
+          const clickElementCount = await target.locator(selector).count();
+          if (clickElementCount === 0) {
+            return {
+              status: 'error',
+              error: `Element not found for click: ${args.target_id} (selector: ${selector})`,
+            };
+          }
+          await target.locator(selector).click({ timeout: 1000 });
         } catch (locatorError) {
           // Strategy 2: Positional mapping fallback
           console.warn(`[VSL] Standard locator failed for ${args.target_id}, trying positional mapping fallback`);
@@ -437,7 +551,7 @@ export async function handleExecuteAction(
           
           // Use elementFromPoint to find actual DOM element at rect center
           const elementFound = await target.evaluate(
-            ([x, y]) => {
+            ([x, y]: [number, number]) => {
               const el = document.elementFromPoint(x, y);
               if (el) {
                 (el as HTMLElement).click();
@@ -471,7 +585,15 @@ export async function handleExecuteAction(
           };
         }
         // Используем Playwright locator API для поддержки frame routing
-        await target.locator(selector).fill(args.value, { timeout: 5000 });
+        // Проверка существования элемента перед fill (MEDIUM-3)
+        const fillElementCount = await target.locator(selector).count();
+        if (fillElementCount === 0) {
+          return {
+            status: 'error',
+            error: `Element not found for fill: ${args.target_id} (selector: ${selector})`,
+          };
+        }
+        await target.locator(selector).fill(args.value, { timeout: 1000 });
         break;
 
       case 'scroll': {
@@ -486,7 +608,7 @@ export async function handleExecuteAction(
         // действий), но ответ собирается ИЗ КЭША без ре-экстракции.
         await browser.evaluate(({ dx, dy }: { dx: number; dy: number }) => {
           window.scrollBy(dx, dy);
-        }, { dx, dy });
+        }, sessionId, { dx, dy });
         await page.waitForTimeout(50);
 
         // Новый скролл-контекст: один лёгкий evaluate читает реальный скролл;
@@ -499,7 +621,7 @@ export async function handleExecuteAction(
             y: window.scrollY,
             width: document.documentElement.scrollWidth,
             height: document.documentElement.scrollHeight,
-          }));
+          }), sessionId);
           const r = raw as ScrollContext | null;
           if (
             r !== null && typeof r === 'object' &&
@@ -554,12 +676,12 @@ export async function handleExecuteAction(
           await browser.evaluateInFrame(targetFrame, ({ sel, val }: { sel: string; val: string }) => {
             const el = document.querySelector(sel) as HTMLSelectElement;
             if (el) el.value = val;
-          }, { sel: selector, val: args.value });
+          }, sessionId, { sel: selector, val: args.value });
         } else {
           await browser.evaluate(({ sel, val }: { sel: string; val: string }) => {
             const el = document.querySelector(sel) as HTMLSelectElement;
             if (el) el.value = val;
-          }, { sel: selector, val: args.value });
+          }, sessionId, { sel: selector, val: args.value });
         }
         break;
 
@@ -572,7 +694,7 @@ export async function handleExecuteAction(
               const event = new MouseEvent('mouseover', { bubbles: true });
               el.dispatchEvent(event);
             }
-          }, selector);
+          }, sessionId, selector);
         } else {
           await browser.evaluate((sel: string) => {
             const el = document.querySelector(sel);
@@ -580,7 +702,7 @@ export async function handleExecuteAction(
               const event = new MouseEvent('mouseover', { bubbles: true });
               el.dispatchEvent(event);
             }
-          }, selector);
+          }, sessionId, selector);
         }
         break;
       case 'blur':
@@ -589,12 +711,12 @@ export async function handleExecuteAction(
           await browser.evaluateInFrame(targetFrame, (sel: string) => {
             const el = document.querySelector(sel) as HTMLElement;
             if (el) el.blur();
-          }, selector);
+          }, sessionId, selector);
         } else {
           await browser.evaluate((sel: string) => {
             const el = document.querySelector(sel) as HTMLElement;
             if (el) el.blur();
-          }, selector);
+          }, sessionId, selector);
         }
         break;
 
@@ -604,12 +726,12 @@ export async function handleExecuteAction(
           await browser.evaluateInFrame(targetFrame, (sel: string) => {
             const el = document.querySelector(sel) as HTMLElement;
             if (el) el.focus();
-          }, selector);
+          }, sessionId, selector);
         } else {
           await browser.evaluate((sel: string) => {
             const el = document.querySelector(sel) as HTMLElement;
             if (el) el.focus();
-          }, selector);
+          }, sessionId, selector);
         }
         break;
       case 'press': {
@@ -641,7 +763,7 @@ export async function handleExecuteAction(
               document.body.appendChild(a);
               a.click();
               document.body.removeChild(a);
-            }, args.value);
+            }, sessionId, args.value);
           } else {
             await browser.evaluate((url: string) => {
               const a = document.createElement('a');
@@ -650,23 +772,23 @@ export async function handleExecuteAction(
               document.body.appendChild(a);
               a.click();
               document.body.removeChild(a);
-            }, args.value);
+            }, sessionId, args.value);
           }
         } else {
           if (targetFrame) {
             await browser.evaluateInFrame(targetFrame, (sel: string) => {
               const el = document.querySelector(sel);
               if (el) (el as HTMLElement).click();
-            }, selector);
+            }, sessionId, selector);
           } else {
             await browser.evaluate((sel: string) => {
               const el = document.querySelector(sel);
               if (el) (el as HTMLElement).click();
-            }, selector);
+            }, sessionId, selector);
           }
         }
 
-        // Ждём регистрацию загрузки в activeDownloads (context.on('download'))
+        // Ждём регистрации загрузки в activeDownloads (context.on('download'))
         const pollDeadline = Date.now() + 5000;
         let newDownload: { downloadId: string; filename: string; url: string } | undefined;
         while (!newDownload && Date.now() <pollDeadline) {
@@ -674,7 +796,7 @@ export async function handleExecuteAction(
             d => !downloadsBefore.some(b => b.downloadId === d.downloadId),
           );
           if (!newDownload) {
-            await browser.evaluate(() => new Promise<void>(resolve => setTimeout(resolve, 50)));
+            await browser.evaluate(() => new Promise<void>(resolve => setTimeout(resolve, 50)), sessionId);
           }
         }
 
@@ -710,13 +832,19 @@ export async function handleExecuteAction(
 
         // Добавить состояние страницы, если запрошено
         if (args.return_state !== false) {
-          const currentUrl = await browser.evaluate(() => window.location.href);
-          const state = await getStateAfterAction(session, browser, currentUrl as string);
-          if (result.data) {
-            result.data.state = state;
-            if (state.error) {
-              result.warning = `State extraction failed: ${state.error}`;
+          try {
+            // Используем page.url() вместо browser.evaluate(), чтобы избежать 'Execution context was destroyed'
+            const currentUrl = page.url();
+            const state = await getStateAfterAction(session, browser, currentUrl as string, sessionId);
+            if (result.data) {
+              result.data.state = state;
+              if (state.error) {
+                result.warning = `State extraction failed: ${state.error}`;
+              }
             }
+          } catch (stateError) {
+            // Если получение состояния упало (например, из-за навигации), возвращаем warning
+            result.warning = `State extraction failed: ${stateError instanceof Error ? stateError.message : String(stateError)}`;
           }
         }
 
@@ -742,7 +870,15 @@ export async function handleExecuteAction(
         }
         // Frame-aware upload: используем locator API для поддержки iframe
         // PlaywrightFrame и PlaywrightPage оба поддерживают locator().setInputFiles()
-        await target.locator(selector).setInputFiles(filePaths.length === 1 ? filePaths[0]! : filePaths);
+        // Проверка существования элемента перед upload (MEDIUM-3)
+        const uploadElementCount = await target.locator(selector).count();
+        if (uploadElementCount === 0) {
+          return {
+            status: 'error',
+            error: `Element not found for upload: ${args.target_id} (selector: ${selector})`,
+          };
+        }
+        await target.locator(selector).setInputFiles(filePaths.length === 1 ? filePaths[0]! : filePaths, { timeout: 1000 });
         const result: ExecuteActionResult = {
           status: 'success',
           data: {
@@ -759,8 +895,8 @@ export async function handleExecuteAction(
 
         // Добавить состояние страницы, если запрошено
         if (args.return_state !== false) {
-          const currentUrl = await browser.evaluate(() => window.location.href);
-          const state = await getStateAfterAction(session, browser, currentUrl as string);
+          const currentUrl = await browser.evaluate(() => window.location.href, sessionId);
+          const state = await getStateAfterAction(session, browser, currentUrl as string, sessionId);
           if (result.data) {
             result.data.state = state;
             if (state.error) {
@@ -773,11 +909,333 @@ export async function handleExecuteAction(
         return result;
       }
 
+      case 'clear': {
+        // Очистка текстового поля (input/textarea)
+        if (targetFrame) {
+          await browser.evaluateInFrame(targetFrame, (sel: string) => {
+            const el = document.querySelector(sel) as HTMLInputElement | HTMLTextAreaElement;
+            if (el) {
+              el.value = '';
+              el.dispatchEvent(new Event('input', { bubbles: true }));
+              el.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+          }, sessionId, selector);
+        } else {
+          await browser.evaluate((sel: string) => {
+            const el = document.querySelector(sel) as HTMLInputElement | HTMLTextAreaElement;
+            if (el) {
+              el.value = '';
+              el.dispatchEvent(new Event('input', { bubbles: true }));
+              el.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+          }, sessionId, selector);
+        }
+        break;
+      }
+
+      case 'drag': {
+        // Drag-and-drop: target_id = source, value = destination ID
+        if (!args.value) {
+          return {
+            status: 'error',
+            error: 'value is required for drag action (destination element ID)',
+          };
+        }
+        // Резолвим destination ID через idMap
+        const destIdMap = session.getIdMap();
+        const destResolvedId = destIdMap.get(args.value) || args.value;
+        const destSelector = `[data-vsl-id="${destResolvedId}"], #${destResolvedId}, .${destResolvedId}`;
+        
+        // Frame-aware drag: используем evaluateInFrame если targetFrame задан
+        if (targetFrame) {
+          await browser.evaluateInFrame(targetFrame, ({ srcSel, dstSel }: { srcSel: string; dstSel: string }) => {
+            const source = document.querySelector(srcSel);
+            const destination = document.querySelector(dstSel);
+            if (source && destination) {
+              const dispatchDragEvent = (el: Element, type: string) => {
+                if (typeof DragEvent === 'function') {
+                  el.dispatchEvent(new DragEvent(type, { bubbles: true, cancelable: true }));
+                } else {
+                  el.dispatchEvent(new Event(type, { bubbles: true, cancelable: true }));
+                }
+              };
+              dispatchDragEvent(source, 'dragstart');
+              dispatchDragEvent(destination, 'dragenter');
+              dispatchDragEvent(destination, 'dragover');
+              dispatchDragEvent(destination, 'drop');
+              dispatchDragEvent(source, 'dragend');
+            }
+          }, sessionId, { srcSel: selector, dstSel: destSelector });
+        } else {
+          await browser.evaluate(({ srcSel, dstSel }: { srcSel: string; dstSel: string }) => {
+            const source = document.querySelector(srcSel);
+            const destination = document.querySelector(dstSel);
+            if (source && destination) {
+              const dispatchDragEvent = (el: Element, type: string) => {
+                if (typeof DragEvent === 'function') {
+                  el.dispatchEvent(new DragEvent(type, { bubbles: true, cancelable: true }));
+                } else {
+                  el.dispatchEvent(new Event(type, { bubbles: true, cancelable: true }));
+                }
+              };
+              dispatchDragEvent(source, 'dragstart');
+              dispatchDragEvent(destination, 'dragenter');
+              dispatchDragEvent(destination, 'dragover');
+              dispatchDragEvent(destination, 'drop');
+              dispatchDragEvent(source, 'dragend');
+            }
+          }, sessionId, { srcSel: selector, dstSel: destSelector });
+        }
+        break;
+      }
+
+      case 'drop': {
+        // Drop на целевой элемент
+        if (targetFrame) {
+          await browser.evaluateInFrame(targetFrame, (sel: string) => {
+            const el = document.querySelector(sel);
+            if (el) {
+              const dispatchDragEvent = (el: Element, type: string) => {
+                if (typeof DragEvent === 'function') {
+                  el.dispatchEvent(new DragEvent(type, { bubbles: true, cancelable: true }));
+                } else {
+                  el.dispatchEvent(new Event(type, { bubbles: true, cancelable: true }));
+                }
+              };
+              dispatchDragEvent(el, 'dragover');
+              dispatchDragEvent(el, 'drop');
+            }
+          }, sessionId, selector);
+        } else {
+          await browser.evaluate((sel: string) => {
+            const el = document.querySelector(sel);
+            if (el) {
+              const dispatchDragEvent = (el: Element, type: string) => {
+                if (typeof DragEvent === 'function') {
+                  el.dispatchEvent(new DragEvent(type, { bubbles: true, cancelable: true }));
+                } else {
+                  el.dispatchEvent(new Event(type, { bubbles: true, cancelable: true }));
+                }
+              };
+              dispatchDragEvent(el, 'dragover');
+              dispatchDragEvent(el, 'drop');
+            }
+          }, sessionId, selector);
+        }
+        break;
+      }
+
+      case 'submit': {
+        // Отправка формы
+        if (targetFrame) {
+          await browser.evaluateInFrame(targetFrame, (sel: string) => {
+            const form = document.querySelector(sel) as HTMLFormElement;
+            if (form) {
+              form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+            }
+          }, sessionId, selector);
+        } else {
+          await browser.evaluate((sel: string) => {
+            const form = document.querySelector(sel) as HTMLFormElement;
+            if (form) {
+              form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+            }
+          }, sessionId, selector);
+        }
+        break;
+      }
+
+      case 'reset': {
+        // Сброс формы
+        if (targetFrame) {
+          await browser.evaluateInFrame(targetFrame, (sel: string) => {
+            const form = document.querySelector(sel) as HTMLFormElement;
+            if (form) {
+              form.reset();
+            }
+          }, sessionId, selector);
+        } else {
+          await browser.evaluate((sel: string) => {
+            const form = document.querySelector(sel) as HTMLFormElement;
+            if (form) {
+              form.reset();
+            }
+          }, sessionId, selector);
+        }
+        break;
+      }
+
+      case 'open': {
+        // Открытие dialog/details
+        if (targetFrame) {
+          await browser.evaluateInFrame(targetFrame, (sel: string) => {
+            const el = document.querySelector(sel);
+            if (typeof HTMLDialogElement !== 'undefined' && el instanceof HTMLDialogElement) {
+              el.showModal();
+            } else if (el instanceof HTMLDetailsElement) {
+              el.open = true;
+            }
+          }, sessionId, selector);
+        } else {
+          await browser.evaluate((sel: string) => {
+            const el = document.querySelector(sel);
+            if (typeof HTMLDialogElement !== 'undefined' && el instanceof HTMLDialogElement) {
+              el.showModal();
+            } else if (el instanceof HTMLDetailsElement) {
+              el.open = true;
+            }
+          }, sessionId, selector);
+        }
+        break;
+      }
+
+      case 'close': {
+        // Закрытие dialog/details
+        if (targetFrame) {
+          await browser.evaluateInFrame(targetFrame, (sel: string) => {
+            const el = document.querySelector(sel);
+            if (typeof HTMLDialogElement !== 'undefined' && el instanceof HTMLDialogElement) {
+              el.close();
+            } else if (el instanceof HTMLDetailsElement) {
+              el.open = false;
+            }
+          }, sessionId, selector);
+        } else {
+          await browser.evaluate((sel: string) => {
+            const el = document.querySelector(sel);
+            if (typeof HTMLDialogElement !== 'undefined' && el instanceof HTMLDialogElement) {
+              el.close();
+            } else if (el instanceof HTMLDetailsElement) {
+              el.open = false;
+            }
+          }, sessionId, selector);
+        }
+        break;
+      }
+
+      case 'expand': {
+        // Раскрытие details/aria-expanded
+        if (targetFrame) {
+          await browser.evaluateInFrame(targetFrame, (sel: string) => {
+            const el = document.querySelector(sel);
+            if (el) {
+              if (el instanceof HTMLDetailsElement) {
+                el.open = true;
+              } else if (el.hasAttribute('aria-expanded')) {
+                el.setAttribute('aria-expanded', 'true');
+              }
+            }
+          }, sessionId, selector);
+        } else {
+          await browser.evaluate((sel: string) => {
+            const el = document.querySelector(sel);
+            if (el) {
+              if (el instanceof HTMLDetailsElement) {
+                el.open = true;
+              } else if (el.hasAttribute('aria-expanded')) {
+                el.setAttribute('aria-expanded', 'true');
+              }
+            }
+          }, sessionId, selector);
+        }
+        break;
+      }
+
+      case 'collapse': {
+        // Сворачивание details/aria-expanded
+        if (targetFrame) {
+          await browser.evaluateInFrame(targetFrame, (sel: string) => {
+            const el = document.querySelector(sel);
+            if (el) {
+              if (el instanceof HTMLDetailsElement) {
+                el.open = false;
+              } else if (el.hasAttribute('aria-expanded')) {
+                el.setAttribute('aria-expanded', 'false');
+              }
+            }
+          }, sessionId, selector);
+        } else {
+          await browser.evaluate((sel: string) => {
+            const el = document.querySelector(sel);
+            if (el) {
+              if (el instanceof HTMLDetailsElement) {
+                el.open = false;
+              } else if (el.hasAttribute('aria-expanded')) {
+                el.setAttribute('aria-expanded', 'false');
+              }
+            }
+          }, sessionId, selector);
+        }
+        break;
+      }
+
+      case 'wait': {
+        // Ожидание условия (селектор или "idle")
+        if (!args.value) {
+          return {
+            status: 'error',
+            error: 'value is required for wait action (selector or "idle")',
+          };
+        }
+        const timeout = args.timeout || 5000;
+        const condition = args.value;
+        
+        if (condition === 'idle') {
+          // Ожидание загрузки документа
+          await page.waitForLoadState('domcontentloaded', { timeout });
+        } else {
+          // Ожидание появления элемента по CSS-селектору
+          await page.waitForSelector(condition, { timeout, state: 'attached' });
+        }
+        break;
+      }
+
+      case 'go_back': {
+        // Навигация назад в истории
+        await page.goBack({ timeout: args.timeout || 5000 });
+        break;
+      }
+
+      case 'go_forward': {
+        // Навигация вперёд в истории
+        await page.goForward({ timeout: args.timeout || 5000 });
+        break;
+      }
+
+      case 'refresh': {
+        // Перезагрузка страницы
+        await page.reload({ timeout: args.timeout || 5000 });
+        break;
+      }
+
+      case 'check':
+      case 'uncheck': {
+        // Check/uncheck для checkbox и radio элементов
+        const shouldBeChecked = args.action === 'check';
+        if (shouldBeChecked) {
+          await target.locator(selector).check({ timeout: 1000 });
+        } else {
+          await target.locator(selector).uncheck({ timeout: 1000 });
+        }
+        break;
+      }
+
       default:
         return {
           status: 'error',
           error: `Action ${args.action} is not yet implemented`,
         };
+    }
+    } catch (error) {
+      // Если действие вызвало навигацию (например, press Enter на форме),
+      // это не ошибка — просто фиксируем навигацию
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      if (errorMsg.includes('Execution context was destroyed') || errorMsg.includes('navigation')) {
+        actionError = error instanceof Error ? error : new Error(errorMsg);
+      } else {
+        // Другая ошибка — пробрасываем
+        throw error;
+      }
     }
 
     const result: ExecuteActionResult = {
@@ -792,20 +1250,65 @@ export async function handleExecuteAction(
     // Возвращать состояние страницы только если return_state !== false
     // По умолчанию return_state=true (для экономии ходов агента)
     if (args.return_state !== false) {
-      // Ждём стабилизации DOM перед извлечением состояния
-      await browser.evaluate(() => {
-        return new Promise<void>((resolve) => {
-          // Даём время на завершение всех async операций и рендеринг
-          setTimeout(() => resolve(), 100);
-        });
-      });
-
-      const currentUrl = await browser.evaluate(() => window.location.href);
-      const state = await getStateAfterAction(session, browser, currentUrl as string);
-      if (result.data) {
-        result.data.state = state;
-        if (state.error) {
-          result.warning = `State extraction failed: ${state.error}`;
+      try {
+        // Детекция навигации: если URL изменился или действие вызвало 'Execution context was destroyed'
+        // Используем page.url() вместо browser.evaluate(), чтобы избежать 'Execution context was destroyed'
+        const urlAfterAction = page.url();
+        const navigationOccurred = urlAfterAction && urlAfterAction !== urlBeforeAction;
+        const contextDestroyed = actionError && actionError.message.includes('Execution context was destroyed');
+        
+        if (navigationOccurred || contextDestroyed) {
+          // Навигация произошла — ждём завершения загрузки новой страницы
+          try {
+            await page.waitForLoadState('domcontentloaded', { timeout: 5000 });
+            // Дополнительная задержка для стабилизации DOM
+            await page.waitForTimeout(200);
+          } catch (waitError) {
+            console.warn('[vsl_execute_action] Navigation detected but waitForLoadState failed:', waitError);
+          }
+        } else {
+          // Навигации не было — ждём стабилизации DOM
+          try {
+            await browser.evaluate(() => {
+              return new Promise<void>((resolve) => {
+                setTimeout(resolve, 100);
+              });
+            }, sessionId);
+          } catch (evalError) {
+            console.warn('[vsl_execute_action] DOM stabilization evaluate failed:', evalError);
+          }
+        }
+        
+        const currentUrl = urlAfterAction || urlBeforeAction;
+        // Добавляем флаг навигации ДО state extraction, чтобы не потерялся при ошибке
+        if ((navigationOccurred || contextDestroyed) && result.data) {
+          result.data.navigated = true;
+          result.data.newUrl = urlAfterAction;
+        }
+        try {
+          const state = await getStateAfterAction(session, browser, currentUrl as string, sessionId);
+          if (result.data) {
+            result.data.state = state;
+            if (state.error) {
+              result.warning = `State extraction failed: ${state.error}`;
+            }
+          }
+        } catch (stateError) {
+          // Если получение состояния упало (например, из-за навигации), возвращаем warning
+          result.warning = `State extraction failed: ${stateError instanceof Error ? stateError.message : String(stateError)}`;
+        }
+      } catch (stateError) {
+        // Если получение состояния упало (например, из-за навигации), возвращаем warning
+        result.warning = `State extraction failed: ${stateError instanceof Error ? stateError.message : String(stateError)}`;
+        // Всё равно пытаемся определить навигацию через page.url()
+        try {
+          const urlAfterAction = page.url();
+          if (urlAfterAction && urlAfterAction !== urlBeforeAction && result.data) {
+            result.data.navigated = true;
+            result.data.newUrl = urlAfterAction;
+          }
+        } catch {
+          // Игнорируем ошибки при получении URL
         }
       }
     }

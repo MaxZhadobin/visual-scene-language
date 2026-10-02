@@ -96,6 +96,45 @@ export { resolveTarget } from './executor/resolveTarget';
 export { ActionExecutionError } from './executor/types';
 export type { ActionResult, ExecutorOptions } from './executor/types';
 
+// ——— Utils: Viewport Filter (DEC-027, dev3_pipeline) ———
+
+export {
+  computeVisibleWindow,
+  computeScrollable,
+  filterObjectsByViewport,
+  collectVisibleIds,
+  applyViewportFilterToDocument,
+  filterDiffByViewport,
+} from './utils/viewportFilter';
+export type {
+  ScrollContext,
+  ViewportWindow,
+  ScrollableInfo,
+} from './utils/viewportFilter';
+
+// ——— Utils: Detail Level Filter (DEC-027) ———
+
+export {
+  filterObjectsByDetailLevel,
+  applyDetailLevelFilter,
+  filterDiffByDetailLevel,
+  isInteractiveType,
+  isContainerType,
+  INTERACTIVE_TYPES,
+  CONTAINER_TYPES,
+} from './utils/detailLevelFilter';
+export type { DetailLevel } from './utils/detailLevelFilter';
+
+// ——— Utils: ID Mapper (short IDs for LLM) ———
+
+export {
+  buildIdMap,
+  buildReverseIdMap,
+  replaceIdsInDocument,
+  replaceIdsInDiff,
+  resolveShortId,
+  resolveShortIdOrThrow,
+} from './utils/idMapper';
 
 // ——— M1.8: Prompt Injection Filter (T1.8.1-T1.8.5) ———
 

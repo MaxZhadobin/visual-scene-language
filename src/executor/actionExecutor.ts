@@ -338,6 +338,8 @@ export async function executeAction(
         clickElement(resolveTargetOf(action, options));
         break;
       case 'type':
+      case 'fill':
+        // fill — alias for type (MCP convenience, parity with MCP execute_action)
         typeInto(
           requireTextTarget(action, resolveTargetOf(action, options)),
           requireValue(action),
@@ -372,6 +374,55 @@ export async function executeAction(
       case 'uncheck':
         setChecked(resolveTargetOf(action, options), action, false);
         break;
+      case 'press': {
+        // press: dispatch KeyboardEvent with the given key name (MCP parity)
+        const key = requireValue(action);
+        const pressTarget = resolveTargetOf(action, options);
+        pressTarget.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
+        pressTarget.dispatchEvent(new KeyboardEvent('keyup', { key, bubbles: true, cancelable: true }));
+        // Special handling for Enter: also dispatch 'keypress' and submit form if applicable
+        if (key === 'Enter') {
+          pressTarget.dispatchEvent(new KeyboardEvent('keypress', { key, bubbles: true, cancelable: true }));
+          const form = pressTarget.closest('form');
+          if (form) {
+            form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+          }
+        }
+        break;
+      }
+      case 'upload': {
+        // upload: set files on input[type=file] (MCP parity)
+        // Extension limitation: local file paths are not accessible from content scripts.
+        // URL-based files (http/https/blob) are fetched and set via DataTransfer API.
+        const uploadInput = resolveTargetOf(action, options);
+        if (!(uploadInput instanceof HTMLInputElement) || uploadInput.type !== 'file') {
+          throw new ActionExecutionError(
+            `Action "upload" requires an <input type="file"> target, got <${uploadInput.tagName.toLowerCase()}>`,
+          );
+        }
+        const fileSource = requireValue(action);
+        if (fileSource.startsWith('http://') || fileSource.startsWith('https://') || fileSource.startsWith('blob:')) {
+          try {
+            const response = await fetch(fileSource);
+            const blob = await response.blob();
+            const filename = fileSource.split('/').pop() || 'upload';
+            const file = new File([blob], filename, { type: blob.type });
+            const dt = new DataTransfer();
+            dt.items.add(file);
+            uploadInput.files = dt.files;
+            dispatchValueEvents(uploadInput);
+          } catch (fetchError) {
+            throw new ActionExecutionError(
+              `Action "upload": failed to fetch file from URL "${fileSource}": ${fetchError instanceof Error ? fetchError.message : String(fetchError)}`,
+            );
+          }
+        } else {
+          throw new ActionExecutionError(
+            `Action "upload": local file paths are not accessible from Extension content scripts. Use a URL or the MCP server for local file uploads.`,
+          );
+        }
+        break;
+      }
       // ——— §7.2 Расширенные (T1.4.2) ———
       case 'drag': {
         // dc_4: target_id = source, value = id destination (второй resolveTarget).
@@ -481,11 +532,66 @@ export async function executeAction(
           'Action "download" requires either target_id (element to click) or value (URL to download)',
         );
       }
+      case 'clickCoordinates': {
+        // clickCoordinates: множественные клики по координатам относительно элемента
+        // value — JSON-строка с массивом кликов: [{x, y, delay_after_ms?}]
+        // Координаты относительные к левому верхнему углу элемента (PARAMETER_CONVENTIONS)
+        const el = resolveTargetOf(action, options);
+        const rawValue = requireValue(action);
+        let clicks: Array<{ x: number; y: number; delay_after_ms?: number }>;
+        try {
+          clicks = JSON.parse(rawValue);
+        } catch {
+          throw new ActionExecutionError(
+            `Action "clickCoordinates" requires valid JSON array in value, got: ${rawValue.slice(0, 100)}`
+          );
+        }
+        if (!Array.isArray(clicks) || clicks.length === 0) {
+          throw new ActionExecutionError(
+            'Action "clickCoordinates" requires non-empty array of clicks in value'
+          );
+        }
+        // Валидация каждого клика
+        for (let i = 0; i <clicks.length; i++) {
+          const click = clicks[i]!;
+          if (typeof click.x !== 'number' || typeof click.y !== 'number') {
+            throw new ActionExecutionError(
+              `clickCoordinates: clicks[${i}] must have numeric x and y`
+            );
+          }
+          if (click.delay_after_ms !== undefined && typeof click.delay_after_ms !== 'number') {
+            throw new ActionExecutionError(
+              `clickCoordinates: clicks[${i}].delay_after_ms must be a number`
+            );
+          }
+        }
+        // Получаем bounding box элемента
+        const rect = el.getBoundingClientRect();
+        // Выполняем клики последовательно
+        for (const click of clicks) {
+          // Конвертируем относительные координаты в абсолютные
+          const absoluteX = rect.left + click.x;
+          const absoluteY = rect.top + click.y;
+          // Находим элемент в точке и кликаем (как в MCP positional mapping)
+          const targetEl = document.elementFromPoint(absoluteX, absoluteY);
+          if (targetEl) {
+            clickElement(targetEl);
+          } else {
+            // Фолбэк: кликаем по самому элементу если elementFromPoint не нашёл
+            clickElement(el);
+          }
+          // Задержка после клика (если указана)
+          if (click.delay_after_ms && click.delay_after_ms > 0) {
+            await sleep(click.delay_after_ms);
+          }
+        }
+        break;
+      }
       default:
         // После validateAction (M1.3) сюда попасть нельзя — защита от прямых
         // вызовов executeAction с действием вне VALID_ACTIONS.
         throw new ActionExecutionError(
-          `Unknown action: "${action.action}" — must be one of VALID_ACTIONS (24 actions)`,
+          `Unknown action: "${action.action}" — must be one of VALID_ACTIONS (28 actions)`,
         );
     }
     return { ...echo, success: true };

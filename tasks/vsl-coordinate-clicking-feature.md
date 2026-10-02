@@ -6,6 +6,12 @@ Current VSL MCP server can **see** reCAPTCHA/hCaptcha challenge iframes via `vsl
 
 When attempting to click on challenge images, the modal closes (likely due to clicking wrong elements like "Skip" button, or timeout issues).
 
+## Core Requirements (from user feedback)
+
+1. **Автоматическая отдача координат (bbox)** в snapshot для всех элементов — УЖЕ РЕАЛИЗОВАНО (не требует изменений)
+2. **Новый tool `vsl_click_coordinates`** для множественных кликов по координатам с задержками
+3. **Возврат diff + screenshot** после кликов (того же элемента/страницы)
+
 ## Proposed Solution
 
 ### 1. New Tool: `vsl_click_coordinates`
@@ -38,56 +44,30 @@ vsl_click_coordinates({
   data: {
     actions_completed: 3,
     diff: { /* VSL diff after all clicks */ },
-    snapshot: { /* New VSL snapshot */ }
+    snapshot: { /* New VSL snapshot */ },
+    screenshot: {
+      type: "image",
+      data: "base64...",
+      mimeType: "image/png"
+    }
   }
 }
-### 2. Enhanced `vsl_get_visual` with Coordinate Grid
-
-Add optional parameter to render coordinate grid overlay on screenshot, making it easier for LLM to determine exact click coordinates.
-
-**New Parameters:**
-{
-  element_id: string,
-  show_grid?: boolean,         // Render coordinate grid overlay (default: false)
-  grid_size?: "3x3" | "4x4" | "auto",  // Grid dimensions (default: "auto")
-  grid_labels?: "coordinates" | "letters" | "numbers",  // Label format (default: "coordinates")
-  grid_color?: string          // Grid line color (default: "rgba(255,0,0,0.5)")
-}
-**Example Usage:**
-vsl_get_visual({
-  element_id: "ifr_2",
-  show_grid: true,
-  grid_size: "3x3",
-  grid_labels: "coordinates"
-})
-**Visual Output:**
-┌─────────┬─────────┬─────────┐
-│  (50,50)│ (150,50)│ (250,50)│
-│         │         │         │
-├─────────┼─────────┼─────────┤
-│ (50,150)│(150,150)│(250,150)│
-│         │         │         │
-├─────────┼─────────┼─────────┤
-│ (50,250)│(150,250)│(250,250)│
-│         │         │         │
-└─────────┴─────────┴─────────┘
 ## Workflow Example: Solving reCAPTCHA Image Challenge
 
 ### Current Workflow (Broken)
-1. vsl_execute_action(click, iframe_0:spn_0)  // Click checkbox
-2. vsl_get_visual(ifr_2)                       // Get challenge screenshot
+1. `vsl_execute_action(click, iframe_0:spn_0)` — Click checkbox
+2. `vsl_get_visual(ifr_2)` — Get challenge screenshot
 3. LLM analyzes images
-4. vsl_execute_action(click, iframe_1:btn_0)  // ❌ Challenge closes (wrong element)
+4. `vsl_execute_action(click, iframe_1:btn_0)` — ❌ Challenge closes (wrong element)
+
 ### New Workflow (Proposed)
-1. vsl_execute_action(click, iframe_0:spn_0)  // Click checkbox
-2. vsl_get_visual(ifr_2, show_grid=true, grid_size="3x3")  // Get challenge with grid
-3. LLM analyzes images with grid overlay, determines coordinates
-4. vsl_click_coordinates(ifr_2, clicks=[
-     {x: 50, y: 50},   // Click image A1
-     {x: 150, y: 50}   // Click image B1
-   ])
-5. LLM sees new screenshot (via return_state), verifies selections
-6. vsl_execute_action(click, verify_button_id)  // Click "Verify" button
+1. `vsl_execute_action(click, iframe_0:spn_0)` — Click checkbox
+2. `vsl_get_visual(ifr_2)` — Get challenge screenshot (bbox координаты уже в snapshot)
+3. LLM анализирует скриншот, определяет координаты нужных изображений по bbox из snapshot
+4. `vsl_click_coordinates(ifr_2, clicks=[{x: 50, y: 50}, {x: 150, y: 50}])` — Кликает по изображениям
+5. LLM видит новый screenshot (через return_state), проверяет выбор
+6. `vsl_execute_action(click, verify_button_id)` — Click "Verify" button
+
 ## Reliability Analysis
 
 ### Coordinate Reliability: **VERY HIGH** ✅
@@ -103,27 +83,17 @@ vsl_get_visual({
 - ⚠️ Dynamic iframe resizing (rare for captchas)
 - ⚠️ Responsive design changes (captcha providers rarely change grid sizes)
 
-**Mitigation:**
-- Use percentage-based coordinates (0-100%) as alternative to pixels
-- Auto-detect grid size from element dimensions
-
 ## Implementation Plan
 
 ### Phase 1: `vsl_click_coordinates` Tool
-1. Create Puppeteer helper function for coordinate-based clicking
-2. Implement sequential click execution with delays
-3. Add diff + snapshot return logic
-4. Write unit tests
-5. Update MCP server tool registry
+1. Create new file `packages/mcp-server/src/tools/clickCoordinates.ts`
+2. Implement sequential click execution with delays using Playwright API (`page.mouse.click`)
+3. Add diff + snapshot return logic (reuse `getStateAfterAction` from executeAction.ts)
+4. Add screenshot return logic (reuse `handleGetVisual` from getVisual.ts)
+5. Register new tool in MCP server (`packages/mcp-server/src/index.ts`)
+6. Write unit tests
 
-### Phase 2: `vsl_get_visual` Grid Overlay
-1. Add canvas drawing logic for grid lines
-2. Implement coordinate/letter/number labels
-3. Add grid_size auto-detection (optional)
-4. Write unit tests
-5. Update documentation
-
-### Phase 3: Integration Testing
+### Phase 2: Integration Testing
 1. Test on reCAPTCHA v2 image challenge
 2. Test on hCaptcha image challenge
 3. Verify coordinate accuracy across different viewport sizes
@@ -136,7 +106,7 @@ vsl_get_visual({
 - **Units:** Pixels (relative to element, not viewport)
 - **Bounds:** Automatically clamped to element dimensions
 
-### Puppeteer Implementation
+### Playwright Implementation
 async function clickAtCoordinates(page: Page, elementId: string, clicks: Click[]) {
   const element = await page.$(`[data-vsl-id="${elementId}"]`);
   const box = await element.boundingBox();
@@ -152,83 +122,47 @@ async function clickAtCoordinates(page: Page, elementId: string, clicks: Click[]
     }
   }
 }
-### Grid Overlay Rendering
-function drawGridOverlay(
-  canvas: HTMLCanvasElement,
-  gridSize: "3x3" | "4x4",
-  labels: "coordinates" | "letters" | "numbers"
-) {
-  const ctx = canvas.getContext('2d');
-  const [cols, rows] = gridSize.split('x').map(Number);
-  const cellWidth = canvas.width / cols;
-  const cellHeight = canvas.height / rows;
-  
-  // Draw grid lines
-  ctx.strokeStyle = 'rgba(255, 0, 0, 0.5)';
-  ctx.lineWidth = 2;
-  
-  for (let i = 1; i <cols; i++) {
-    ctx.beginPath();
-    ctx.moveTo(i * cellWidth, 0);
-    ctx.lineTo(i * cellWidth, canvas.height);
-    ctx.stroke();
-  }
-  
-  for (let i = 1; i <rows; i++) {
-    ctx.beginPath();
-    ctx.moveTo(0, i * cellHeight);
-    ctx.lineTo(canvas.width, i * cellHeight);
-    ctx.stroke();
-  }
-  
-  // Draw labels
-  ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
-  ctx.font = '14px Arial';
-  
-  for (let row = 0; row <rows; row++) {
-    for (let col = 0; col <cols; col++) {
-      const centerX = (col + 0.5) * cellWidth;
-      const centerY = (row + 0.5) * cellHeight;
-      
-      let label: string;
-      if (labels === 'coordinates') {
-        label = `(${Math.round(centerX)}, ${Math.round(centerY)})`;
-      } else if (labels === 'letters') {
-        label = `${String.fromCharCode(65 + row)}${col + 1}`;
-      } else {
-        label = `${row * cols + col + 1}`;
-      }
-      
-      ctx.fillText(label, centerX - 20, centerY);
-    }
-  }
-}
+### Existing Code Reuse
+- **Positional mapping fallback** (executeAction.ts:396-462): уже реализован `elementFromPoint` + click по координатам. Можно адаптировать для множественных кликов.
+- **getStateAfterAction** (executeAction.ts): возвращает diff + snapshot после действия. Переиспользовать для возврата состояния.
+- **handleGetVisual** (getVisual.ts): делает скриншот элемента по element_id. Переиспользовать для возврата screenshot.
+
 ## Acceptance Criteria
 
 - [ ] `vsl_click_coordinates` tool accepts target_id and array of clicks
 - [ ] Each click supports optional delay_after_ms parameter
+- [ ] Coordinates are relative to target element (pixels, not viewport)
 - [ ] Tool returns diff + new snapshot when return_state=true
-- [ ] Coordinates are relative to target element (not viewport)
-- [ ] `vsl_get_visual` supports show_grid parameter
-- [ ] Grid overlay renders correctly for 3x3 and 4x4 grids
-- [ ] Grid labels support coordinates, letters, and numbers formats
+- [ ] Tool returns new screenshot of the same element/page after clicks
 - [ ] Tested on reCAPTCHA v2 image challenge — successfully clicks multiple images
 - [ ] Tested on hCaptcha image challenge — successfully clicks multiple images
 - [ ] Documentation updated with usage examples
 
-## Open Questions
+## Design Decisions (from user feedback)
 
-1. **Should we support percentage-based coordinates?** (e.g., x: 25%, y: 25%)
-   - Pro: More resilient to size changes
-   - Con: Less precise for small elements
+### ✅ Pixels over Percentages
+**Decision:** Use pixel coordinates (not percentages) for coordinate-based clicking.
 
-2. **Should grid overlay be a separate tool?** (e.g., `vsl_get_visual_with_grid`)
-   - Pro: Cleaner API, doesn't bloat existing tool
-   - Con: More tools to maintain
+**Rationale:**
+- Pixels are more reliable for captcha (fixed dimensions ~400x400px)
+- Percentages add complexity without benefit for fixed-size elements
+- LLM can calculate pixel coordinates from bbox in snapshot
 
-3. **Should we add "batch actions" tool?** (click + type + scroll in one call)
-   - Pro: Reduces round trips for complex workflows
-   - Con: More complex error handling
+### ✅ No Grid Overlay
+**Decision:** Do NOT implement grid overlay feature.
+
+**Rationale:**
+- LLM can calculate coordinates from bbox in snapshot (already provided)
+- Grid overlay adds complexity without significant benefit
+- Simpler API = easier to maintain
+
+### ✅ Playwright API (not Puppeteer)
+**Decision:** Use Playwright API for implementation.
+
+**Rationale:**
+- Project uses Playwright (not Puppeteer as in original spec)
+- Playwright has equivalent functionality (`page.mouse.click`)
+- Consistency with existing codebase
 
 ## Priority
 
@@ -237,18 +171,26 @@ function drawGridOverlay(
 ## Estimated Effort
 
 - Phase 1 (vsl_click_coordinates): 4-6 hours
-- Phase 2 (grid overlay): 3-4 hours
-- Phase 3 (testing): 2-3 hours
-- **Total:** 9-13 hours
+- Phase 2 (testing): 2-3 hours
+- **Total:** 6-9 hours
 
 ## Dependencies
 
-- Puppeteer `page.mouse.click()` API
-- Canvas API for grid overlay rendering
+- Playwright `page.mouse.click()` API
 - Existing VSL element identification system
+- Existing `getStateAfterAction` logic (executeAction.ts)
+- Existing `handleGetVisual` logic (getVisual.ts)
 
 ## Related Notes
 
 - reCAPTCHA image challenge is fully accessible via VSL (cross-origin policy does NOT block VSL)
 - Current limitation: cannot click on specific images inside challenge iframe
 - Solution: coordinate-based clicking with relative coordinates
+- Bbox coordinates are already provided in snapshot (no changes needed to getSnapshot.ts)
+
+## Out of Scope (explicitly excluded)
+
+- ❌ Percentage-based coordinates (pixels are more reliable)
+- ❌ Grid overlay for `vsl_get_visual` (LLM calculates from bbox)
+- ❌ Batch actions tool (click + type + scroll in one call) — may be added later
+- ❌ Changes to `vsl_get_snapshot` (bbox already provided)

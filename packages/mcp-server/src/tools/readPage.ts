@@ -87,6 +87,7 @@ export async function handleReadPage(
   browser: BrowserManager,
   session: ServerSession,
   _config: McpServerConfig,
+  sessionId?: string,
 ): Promise<ReadPageResult> {
   const startTime = Date.now();
 
@@ -150,10 +151,10 @@ export async function handleReadPage(
       }
 
       // Навигация по URL
-      await browser.navigate(args.url);
+      await browser.navigate(args.url, sessionId!);
 
       // Извлечение HTML после рендера
-      const html = await browser.getContent();
+      const html = await browser.getContent(sessionId!);
 
       // Проверка на SPA (после рендера — более точная)
       const isSpa = detectSpa(html);
@@ -163,7 +164,7 @@ export async function handleReadPage(
       // При сбое — фолбэк на кустарное извлечение (устойчивость).
       const hadPreviousSnapshot = session.hasSnapshot();
       try {
-        const extraction = await extractDomTree(browser);
+        const extraction = await extractDomTree(browser, sessionId!);
         session.snapshotFromElements(extraction.elements, {
           viewport: extraction.viewport,
           url: args.url,
@@ -171,10 +172,10 @@ export async function handleReadPage(
           timestamp: new Date().toISOString(),
           scroll: extraction.scroll,
         });
-        await injectVslIdsIntoDom(browser, session.getSnapshot().objects);
+        await injectVslIdsIntoDom(browser, session.getSnapshot().objects, new Map(), sessionId!);
       } catch (extractError) {
         console.error('[vsl_read_page] SDK extraction failed, falling back to legacy extraction:', extractError);
-        const fallbackDoc = await extractVslFromPage(browser);
+        const fallbackDoc = await extractVslFromPage(browser, sessionId!);
         session.setSnapshot(fallbackDoc as never);
       }
       const hasDiff = hadPreviousSnapshot;
@@ -211,7 +212,7 @@ export async function handleReadPage(
         url: args.url,
         mode: 'render' as const,
         content,
-        vslDocument: rawSnapshot,
+        vslDocument: replaceIdsInDocument(rawSnapshot, reverseIdMap),
         snapshot: finalSnapshot,
         diff: finalDiff,
         hasDiff,
@@ -271,19 +272,21 @@ export async function handleReadPage(
       url: args.url,
       mode: 'http' as const,
       content: httpResult.textContent,
-      vslDocument: httpResult.vslDocument,
+      vslDocument: replaceIdsInDocument(rawSnapshot as VslDocument, reverseIdMap),
       snapshot: finalSnapshot,
       diff: finalDiff,
       hasDiff,
-      metadata: {
-        title: httpResult.title,
-        wordCount: httpResult.wordCount,
-        isSpa: httpResult.isSpa,
-        readableApplied: httpResult.readableApplied,
-        detail_level: detailLevel,
-        ...computeVslMetrics(fullSnapshot),
-        scrollable,
-      },
+        metadata: {
+          title: httpResult.title,
+          wordCount: httpResult.wordCount,
+          isSpa: httpResult.isSpa,
+          readableApplied: httpResult.readableApplied,
+          detail_level: detailLevel,
+          ...computeVslMetrics(fullSnapshot),
+          scrollable,
+          id_scheme: 'counter' as const,
+          warning: 'HTTP path: IDs are sequential counters (e.g., btn_0, inp_1). These IDs are NOT compatible with vsl_execute_action. For interactive actions, use vsl_get_snapshot to get browser DOM IDs.',
+        },
     };
 
     return {
@@ -305,7 +308,7 @@ export async function handleReadPage(
 /**
  * Извлекает VSL-документ из текущей страницы через evaluate().
  */
-async function extractVslFromPage(browser: BrowserManager): Promise<unknown> {
+async function extractVslFromPage(browser: BrowserManager, sessionId: string): Promise<unknown> {
   let domTree: Record<string, unknown> | null = null;
   
   try {
@@ -340,7 +343,7 @@ async function extractVslFromPage(browser: BrowserManager): Promise<unknown> {
       };
       
       return extractElement(document.documentElement);
-    }) as Record<string, unknown> | null;
+    }, sessionId) as Record<string, unknown> | null;
   } catch (error) {
     console.error('extractVslFromPage: browser.evaluate failed:', error);
     domTree = null;

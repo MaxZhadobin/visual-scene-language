@@ -27,6 +27,11 @@
  *  - target_id для элементов iframe: frame_{frameId}:{localId};
  *  - background маршрутизирует vsl/execute по frameId из target_id.
  *
+ * dev_8 — MCP parity:
+ *  - Передаёт параметры snapshot (detail_level, ttl, full) в content script;
+ *  - Сохраняет text_blocks из response для lazy text loading (M1.7, DEC-026);
+ *  - Проксирует MSG_GET_TEXT_BLOCK от popup к content script.
+ *
  * Runtime-строки — на английском (решение 22.09.2026).
  */
 
@@ -36,6 +41,7 @@ import { OpenAIAdapter } from '../../src/llm/openai';
 import type { LlmAction, LlmAdapter, RawLlmCaller } from '../../src/llm/types';
 import type { VslDocument, VslObject } from '../../src/types/vsl';
 import { LlmVisionClassifier } from '../../src/vision/llmVisionClassifier';
+import type { DetailLevel } from '../../src';
 import {
   AGENT_STATE_KEY,
   DEFAULT_MAX_STEPS,
@@ -43,6 +49,7 @@ import {
   MSG_CLASSIFY,
   MSG_EXECUTE,
   MSG_FRAME_SNAPSHOT,
+  MSG_GET_TEXT_BLOCK,
   MSG_IFRAME_FRAME_IDS,
   MSG_IFRAME_RECTS,
   MSG_SNAPSHOT,
@@ -54,9 +61,12 @@ import type {
   AgentStepRecord,
   ClassifyRequest,
   FrameSnapshotResponse,
+  GetTextBlockRequest,
+  GetTextBlockResponse,
   IframeFrameIdsRequest,
   IframeFrameIdsResponse,
   IframeRectsMessage,
+  SnapshotRequest,
   SnapshotResponse,
   StartRequest,
 } from './protocol';
@@ -97,6 +107,12 @@ const iframeRectsMap = new Map<string, { x: number; y: number; width: number; he
  */
 let pendingFrameSync: { expected: number; received: number; resolve: () => void } | null = null;
 let frameSyncTimeout: ReturnType<typeof setTimeout> | null = null;
+
+/**
+ * Lazy text loading (M1.7, DEC-026): text_blocks map из последнего snapshot.
+ * Content script возвращает text_blocks в SnapshotResponse — background хранит
+ * их для последующих запросов vsl/getTextBlock от popup или агента.
+ */
 
 function toErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -180,94 +196,92 @@ async function handleClassify(
 }
 
 /**
- * Iframe support (M2.1): агрегирует snapshots из всех фреймов в единый VslDocument.
- * Top frame snapshot + все iframe snapshots как iframe-объекты.
  * Iframe support (M2.1 rework): агрегирует snapshots из всех фреймов в единый VslDocument.
  * Поддерживает nested iframes (iframe внутри iframe) через рекурсивную обработку на основе parentFrameId.
  * Координаты iframe-объектов (p, s) берутся из rect iframe элемента в parent DOM.
  */
 export function aggregateSnapshotsWithFrames(
   topFrameSnapshot: SnapshotResponse,
-  ): SnapshotResponse {
-    if (frameRegistry.size === 0) {
-      return topFrameSnapshot; // нет iframe — возвращаем как есть
-    }
-  
-    // Iframe support (M2.1 rework): строим дерево фреймов на основе parentFrameId.
-    // parentFrameId === 0 означает top frame, > 0 — iframe.
-    const childrenMap = new Map<number, number[]>();
-    for (const [frameId, frameSnap] of frameRegistry.entries()) {
-      const parentId = frameSnap.parentFrameId ?? 0; // 0 = top frame
-      if (!childrenMap.has(parentId)) {
-        childrenMap.set(parentId, []);
-      }
-      childrenMap.get(parentId)!.push(frameId);
-    }
-  
-    // Рекурсивная функция для добавления iframe-объектов в parent VSL document
-    function addIframeObjectsToParent(
-      parentSnapshot: VslDocument,
-      parentFrameId: number,
-    ): void {
-      const childFrameIds = childrenMap.get(parentFrameId) ?? [];
-      for (const childFrameId of childFrameIds) {
-        const childFrameSnap = frameRegistry.get(childFrameId);
-        if (!childFrameSnap || !('objects' in childFrameSnap.snapshot)) {
-          continue; // VslDiff — пропускаем
-        }
-        
-        // Координаты iframe относительно parent frame
-        // Для direct children top frame используем iframeRectsMap (абсолютные координаты на странице)
-        // Для nested iframes используем [0, 0] (fallback) — координаты относительно parent iframe
-        const rect = iframeRectsMap.get(childFrameSnap.url);
-        const position: [number, number] = rect ? [rect.x, rect.y] : [0, 0];
-        const size: [number, number] = rect ? [rect.width, rect.height] : [0, 0];
-        
-        const iframeObject: VslObject = {
-          id: `iframe_${childFrameId}`,
-          t: 'iframe' as const,
-          p: position,
-          s: size,
-          iframe: {
-            url: childFrameSnap.url,
-            frameId: childFrameId,
-            vsl: childFrameSnap.snapshot as VslDocument,
-          },
-        };
-        
-        parentSnapshot.objects = parentSnapshot.objects ?? [];
-        parentSnapshot.objects.push(iframeObject);
-        
-        // Рекурсивно добавляем children этого iframe (nested iframes)
-        addIframeObjectsToParent(childFrameSnap.snapshot as VslDocument, childFrameId);
-      }
-    }
-  
-    // SnapshotResult может быть VslDiff — проверяем, что это VslDocument
-    const topSnapshot = topFrameSnapshot.snapshot;
-    if (!('objects' in topSnapshot)) {
-      // Это VslDiff, а не VslDocument — возвращаем как есть (iframe не агрегируем)
-      return topFrameSnapshot;
-    }
-  
-    // Добавляем iframe-объекты рекурсивно начиная с top frame (parentFrameId = 0)
-    addIframeObjectsToParent(topSnapshot as VslDocument, 0);
-  
-    // Объединяем fragments из всех фреймов
-    const aggregatedFragments = {
-      ...(topFrameSnapshot.fragments ?? {}),
-    };
-    for (const frameSnap of frameRegistry.values()) {
-      if (frameSnap.fragments) {
-        Object.assign(aggregatedFragments, frameSnap.fragments);
-      }
-    }
-  
-    return {
-      snapshot: topSnapshot,
-      fragments: Object.keys(aggregatedFragments).length > 0 ? aggregatedFragments : undefined,
-    };
+): SnapshotResponse {
+  if (frameRegistry.size === 0) {
+    return topFrameSnapshot; // нет iframe — возвращаем как есть
   }
+
+  // Iframe support (M2.1 rework): строим дерево фреймов на основе parentFrameId.
+  // parentFrameId === 0 означает top frame, > 0 — iframe.
+  const childrenMap = new Map<number, number[]>();
+  for (const [frameId, frameSnap] of frameRegistry.entries()) {
+    const parentId = frameSnap.parentFrameId ?? 0; // 0 = top frame
+    if (!childrenMap.has(parentId)) {
+      childrenMap.set(parentId, []);
+    }
+    childrenMap.get(parentId)!.push(frameId);
+  }
+
+  // SnapshotResult может быть VslDiff — проверяем, что это VslDocument
+  const topSnapshot = topFrameSnapshot.snapshot;
+  if (!('objects' in topSnapshot)) {
+    // Это VslDiff, а не VslDocument — возвращаем как есть (iframe не агрегируем)
+    return topFrameSnapshot;
+  }
+
+  // Рекурсивная функция для добавления iframe-объектов в parent VSL document
+  function addIframeObjectsToParent(
+    parentSnapshot: VslDocument,
+    parentFrameId: number,
+  ): void {
+    const childFrameIds = childrenMap.get(parentFrameId) ?? [];
+    for (const childFrameId of childFrameIds) {
+      const childFrameSnap = frameRegistry.get(childFrameId);
+      if (!childFrameSnap || !('objects' in childFrameSnap.snapshot)) {
+        continue; // VslDiff — пропускаем
+      }
+
+      // Координаты iframe относительно parent frame
+      const rect = iframeRectsMap.get(childFrameSnap.url);
+      const position: [number, number] = rect ? [rect.x, rect.y] : [0, 0];
+      const size: [number, number] = rect ? [rect.width, rect.height] : [0, 0];
+
+      const iframeObject: VslObject = {
+        id: `iframe_${childFrameId}`,
+        t: 'iframe' as const,
+        p: position,
+        s: size,
+        iframe: {
+          url: childFrameSnap.url,
+          frameId: childFrameId,
+          vsl: childFrameSnap.snapshot as VslDocument,
+        },
+      };
+
+      parentSnapshot.objects = parentSnapshot.objects ?? [];
+      parentSnapshot.objects.push(iframeObject);
+
+      // Рекурсивно добавляем children этого iframe (nested iframes)
+      addIframeObjectsToParent(childFrameSnap.snapshot as VslDocument, childFrameId);
+    }
+  }
+
+  // Добавляем iframe-объекты рекурсивно начиная с top frame (parentFrameId = 0)
+  addIframeObjectsToParent(topSnapshot as VslDocument, 0);
+
+  // Объединяем fragments из всех фреймов
+  const aggregatedFragments = {
+    ...(topFrameSnapshot.fragments ?? {}),
+  };
+  for (const frameSnap of frameRegistry.values()) {
+    if (frameSnap.fragments) {
+      Object.assign(aggregatedFragments, frameSnap.fragments);
+    }
+  }
+
+  return {
+    snapshot: topSnapshot,
+    fragments: Object.keys(aggregatedFragments).length > 0 ? aggregatedFragments : undefined,
+    text_blocks: topFrameSnapshot.text_blocks,
+    scrollable: topFrameSnapshot.scrollable,
+  };
+}
 
 /**
  * Iframe support (M2.1): парсит frame-префикс из target_id.
@@ -307,6 +321,7 @@ async function runAgentLoop(start: StartRequest): Promise<void> {
     // чтобы не было stale snapshots от предыдущих циклов.
     frameRegistry.clear();
     iframeRectsMap.clear();
+    // lazy text loading: сбрасываем text_blocks
     const tabId = await getActiveTabId();
 
     for (let step = 1; step <= maxSteps; step += 1) {
@@ -324,11 +339,16 @@ async function runAgentLoop(start: StartRequest): Promise<void> {
       // vision=true (T1.5.5): content обогащает снапшот (enrichWithVision) и
       // возвращает данные фрагментов отдельно (SnapshotResponse.fragments).
       // Iframe support (M2.1): агрегируем snapshots из всех фреймов.
-      const topFrameResponse = (await chrome.tabs.sendMessage(tabId, {
+      // dev_8: передаём параметры snapshot (detail_level, ttl, full) для parity с MCP.
+      const snapshotRequest: SnapshotRequest = {
         type: MSG_SNAPSHOT,
         vision: true,
-      })) as SnapshotResponse;
-      
+        detail_level: (start.detail_level as DetailLevel) ?? 'medium',
+        ttl: start.ttl ?? 5000,
+        full: start.full ?? false,
+      };
+      const topFrameResponse = (await chrome.tabs.sendMessage(tabId, snapshotRequest)) as SnapshotResponse;
+
       // Iframe support (M2.1 rework): ждём iframe snapshots через explicit synchronization.
       // Content scripts в iframe отправляют MSG_FRAME_SNAPSHOT асинхронно через
       // chrome.runtime.sendMessage (fire-and-forget). Background ждёт все фреймы
@@ -339,8 +359,11 @@ async function runAgentLoop(start: StartRequest): Promise<void> {
         await syncPromise;
         (globalThis as unknown as { __pendingFrameSyncPromise?: Promise<void> }).__pendingFrameSyncPromise = undefined;
       }
-      
+
       const response = aggregateSnapshotsWithFrames(topFrameResponse);
+
+      // dev_8: сохраняем text_blocks из response для lazy text loading (M1.7, DEC-026)
+      // dev_8: text_blocks сохраняются в content script для lazy text loading (M1.7, DEC-026)
 
       // Шаг 2: решение LLM (валидация действия по VSL JSON внутри decide, §7.4);
       // данные фрагментов (base64) — image-блоки в decide (DEC-015, lazy loading).
@@ -380,6 +403,7 @@ async function runAgentLoop(start: StartRequest): Promise<void> {
     visionClassifier = null; // ключ/классификатор не живут вне цикла
     frameRegistry.clear(); // iframe snapshots не живут вне цикла
     iframeRectsMap.clear(); // iframe rects не живут вне цикла
+    // lazy text loading: сбрасываем text_blocks
   }
 }
 
@@ -396,13 +420,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     void runAgentLoop(start);
     return undefined; // прогресс цикла — через chrome.storage, не через этот канал
   }
-  
+
   if (message.type === MSG_STOP) {
     stopRequested = true; // проверяется циклом между шагами
     sendResponse({ ok: true });
     return undefined;
   }
-  
+
   if (message.type === MSG_FRAME_SNAPSHOT) {
     // Iframe support (M2.1 rework): обработка MSG_FRAME_SNAPSHOT от content scripts в iframe.
     const frameSnapshot = message as unknown as FrameSnapshotResponse;
@@ -426,10 +450,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             parentFrameId = null;
           }
         }
-        
+
         // Сохраняем snapshot в registry с frameId и parentFrameId
         frameRegistry.set(frameId, { ...frameSnapshot, frameId, parentFrameId });
-        
+
         // Iframe support (M2.1 rework): explicit synchronization countdown.
         // Decrement received count и resolve Promise когда все фреймы ответили.
         if (pendingFrameSync) {
@@ -454,7 +478,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     // Top frame собирает rects всех iframe элементов через collectIframeRects()
     // и отправляет их в background для установки координат iframe-объектов.
     const rectsMessage = message as unknown as IframeRectsMessage;
-    
+
     // Rework 3: динамическая очистка stale frames из registry.
     // MSG_IFRAME_RECTS содержит актуальный список iframe на странице — удаляем из registry
     // фреймы, которых больше нет (например, динамически удалённые iframe).
@@ -469,11 +493,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         iframeRectsMap.delete(url);
       }
     }
-    
+
     for (const { url, rect } of rectsMessage.iframes) {
       iframeRectsMap.set(url, rect);
     }
-    
+
     // Iframe support (M2.1 rework): explicit synchronization mechanism.
     // Создаём Promise для ожидания MSG_FRAME_SNAPSHOT от всех фреймов.
     // iframeCount — количество iframe, которые должны отправить snapshots.
@@ -485,13 +509,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         received: 0,
         resolve: () => {}, // будет перезаписан в Promise constructor
       };
-      
+
       // Создаём Promise, который resolve когда все фреймы отправят snapshots
       // или timeout (500ms) для предотвращения deadlock.
       const syncPromise = new Promise<void>((resolve) => {
         pendingFrameSync!.resolve = resolve;
       });
-      
+
       // Timeout fallback: если фрейм не ответил за 500ms, продолжаем агрегацию
       frameSyncTimeout = setTimeout(() => {
         if (pendingFrameSync) {
@@ -499,21 +523,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           pendingFrameSync = null;
         }
       }, 500);
-      
+
       // Сохраняем Promise в module-level переменную для runAgentLoop
       // (не await здесь — message handler не может await)
       (globalThis as unknown as { __pendingFrameSyncPromise?: Promise<void> }).__pendingFrameSyncPromise = syncPromise;
     }
-    
+
     return undefined; // не отвечаем (fire-and-forget)
   }
+
   if (message.type === MSG_IFRAME_FRAME_IDS) {
     // Iframe support (M2.1 rework): обработка MSG_IFRAME_FRAME_IDS от top frame content script.
     // Top frame собирает URL iframe элементов через collectIframeRects() и отправляет запрос
     // для получения frameId из frameRegistry. Background ищет frameId по URL и возвращает маппинг.
     const request = message as unknown as IframeFrameIdsRequest;
     const frameIds: Record<string, number> = {};
-    
+
     // Ищем frameId в frameRegistry по URL
     for (const url of request.urls) {
       for (const [frameId, frameSnap] of frameRegistry.entries()) {
@@ -523,9 +548,29 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
       }
     }
-    
+
     sendResponse({ frameIds } as IframeFrameIdsResponse);
     return false; // канал закрывается после sendResponse
+  }
+
+  // dev_8: проксирование MSG_GET_TEXT_BLOCK от popup к content script (lazy text loading, M1.7)
+  // Content script хранит text_blocks в session — background проксирует запрос.
+  if (message.type === MSG_GET_TEXT_BLOCK) {
+    const request = message as unknown as GetTextBlockRequest;
+    // Проксируем запрос в content script (top frame, frameId=0)
+    (async () => {
+      try {
+        const tabId = await getActiveTabId();
+        const response = (await chrome.tabs.sendMessage(tabId, {
+          type: MSG_GET_TEXT_BLOCK,
+          block_id: request.block_id,
+        })) as GetTextBlockResponse;
+        sendResponse(response);
+      } catch (error) {
+        sendResponse({ block_id: request.block_id, error: toErrorMessage(error) });
+      }
+    })();
+    return true; // держим канал открытым до sendResponse (контракт MV3)
   }
 
   if (message.type === MSG_CAPTURE) {

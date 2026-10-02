@@ -19,10 +19,10 @@
  * и структурными тестами tests/extension (jest/ts-jest компилирует его вместе
  * с SDK-типами). Runtime-строки — на английском (решение 22.09.2026).
  */
-
 import type { LlmAction, VisualFragmentData } from '../../src/llm/types';
 import type { SnapshotResult } from '../../src/session/snapshotSession';
 import type { VisionClassification } from '../../src/vision/types';
+import type { DetailLevel } from '../../src';
 
 /** background → content: построить VSL-снапшот (полный документ или дифф). */
 export const MSG_SNAPSHOT = 'vsl/snapshot';
@@ -48,6 +48,8 @@ export const MSG_FRAME_SNAPSHOT = 'vsl/frameSnapshot';
 /** content → background: rects iframe элементов из parent DOM (M2.1). */
 export const MSG_IFRAME_RECTS = 'vsl/iframeRects';
 
+/** content → background: получить полный текст по txt_ref (lazy text loading, M1.7). */
+export const MSG_GET_TEXT_BLOCK = 'vsl/getTextBlock';
 /** LLM-провайдеры, поддерживаемые адаптерами M1.3 (§9.4). */
 export type LlmProvider = 'openai' | 'anthropic' | 'qwen';
 
@@ -73,10 +75,17 @@ export interface IframeFrameIdsResponse {
   frameIds: Record<string, number>;
 }
 /** background → content. */
+/** background → content. */
 export interface SnapshotRequest {
   type: typeof MSG_SNAPSHOT;
   /** Vision-ветка (T1.5.5): обогащение снапшота через enrichWithVision. */
   vision?: boolean;
+  /** Уровень детализации (DEC-027): 'low' | 'medium' | 'high'. Default: 'medium'. */
+  detail_level?: DetailLevel;
+  /** TTL кэша в мс (dev_5). Default: 5000. 0 = отключить кэш. */
+  ttl?: number;
+  /** Полный режим: возвращает весь документ без фильтров (замена удалённого тула полного снапшота). */
+  full?: boolean;
 }
 
 /** Ответ content на vsl/snapshot: снапшот + (при vision) данные фрагментов. */
@@ -84,6 +93,10 @@ export interface SnapshotResponse {
   snapshot: SnapshotResult;
   /** Данные фрагментов (base64) по vf_id — только при vision=true (DEC-015). */
   fragments?: Record<string, VisualFragmentData>;
+  /** Метаданные scrollable {top, bottom} — есть ли контент выше/ниже видимого окна. */
+  scrollable?: { top: boolean; bottom: boolean };
+  /** Карта text_blocks для lazy text loading (DEC-026). */
+  text_blocks?: Record<string, string>;
 }
 
 /**
@@ -133,7 +146,24 @@ export interface ExecuteRequest {
   action: LlmAction;
 }
 
-export type ContentMessage = SnapshotRequest | ExecuteRequest;
+/** content → background: запрос полного текста по txt_ref (lazy text loading, M1.7). */
+export interface GetTextBlockRequest {
+  type: typeof MSG_GET_TEXT_BLOCK;
+  /** ID текстового блока из txt_ref поля VSL объекта (формат tb_xxx). */
+  block_id: string;
+}
+
+/** background → content: полный текст или описание сбоя. */
+export interface GetTextBlockResponse {
+  /** ID блока (для корреляции). */
+  block_id: string;
+  /** Полный текст блока. */
+  text?: string;
+  /** Описание сбоя если текст не найден. */
+  error?: string;
+}
+
+export type ContentMessage = SnapshotRequest | ExecuteRequest | GetTextBlockRequest;
 
 /** content → background: запрос скриншота viewport (vision-ветка, T1.5.5). */
 export interface CaptureRequest {
@@ -160,6 +190,7 @@ export interface ClassifyResponse {
 }
 
 /** popup → background. */
+/** popup → background. */
 export interface StartRequest {
   type: typeof MSG_START;
   goal: string;
@@ -171,6 +202,12 @@ export interface StartRequest {
   model?: string;
   /** Лимит шагов цикла; по умолчанию DEFAULT_MAX_STEPS (решение dc_6). */
   maxSteps?: number;
+  /** Уровень детализации snapshot (dev_8, MCP parity). Default: 'medium'. */
+  detail_level?: DetailLevel;
+  /** TTL кэша snapshot в мс (dev_8, MCP parity). Default: 5000. */
+  ttl?: number;
+  /** Полный режим snapshot (dev_8, MCP parity). Default: false. */
+  full?: boolean;
 }
 
 export interface StopRequest {

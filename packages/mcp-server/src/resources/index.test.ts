@@ -52,10 +52,10 @@ describe('MCP Resources', () => {
       getSession: jest.fn().mockReturnValue({
         sessionId: 'default',
         session: mockSession,
-        browser: null,
         createdAt: Date.now(),
         lastAccessedAt: Date.now(),
       }),
+      getBrowserManager: jest.fn(),
       createSession: jest.fn(),
       closeSession: jest.fn(),
       closeAll: jest.fn(),

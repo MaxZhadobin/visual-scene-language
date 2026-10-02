@@ -47,8 +47,8 @@ export interface SegmentedElement {
 }
 
 /** Элемент декоративен (aria-hidden="true") → в VSL не включается. */
-export function isAriaHidden(attributes: Record<string, string>): boolean {
-  return attributes['aria-hidden'] === 'true';
+export function isAriaHidden(attributes: Record<string, string> | undefined): boolean {
+  return attributes?.['aria-hidden'] === 'true';
 }
 
 function segmentOne(el: ExtractedElement): SegmentedElement {
@@ -83,10 +83,18 @@ function segmentOne(el: ExtractedElement): SegmentedElement {
 export function segmentTree(elements: readonly ExtractedElement[]): SegmentedElement[] {
   const result: SegmentedElement[] = [];
   for (const el of elements) {
+    // Защитная проверка: если элемент некорректен (нет attributes), пропускаем.
+
+    // Это может произойти при ошибке сериализации через browser.evaluate()
+    // или при рекурсивной обработке вложенных элементов в collectVisibleChildren().
+    if (!el || !el.attributes) {
+      console.warn('[VSL] Skipping malformed element (missing attributes):', JSON.stringify(el).slice(0, 200));
+      continue;
+    }
     if (isAriaHidden(el.attributes)) continue;
     if (isPointerInvisible(el.css)) continue;
     const segmented = segmentOne(el);
-    segmented.ch = segmentTree(el.children);
+    segmented.ch = segmentTree(el.children ?? []);
     if (segmented.t === null) {
       segmented.t = resolveLevel4Type(segmented);
     }

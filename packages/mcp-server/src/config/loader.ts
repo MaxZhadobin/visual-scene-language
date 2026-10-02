@@ -46,6 +46,10 @@ export interface BrowserConfig {
   downloadTimeout?: number;
   /** Разрешить скачивание файлов (по умолчанию true). */
   acceptDownloads?: boolean;
+  /** Путь для persistent browser context (user data dir). Если указан — используется launchPersistentContext. */
+  userDataDir?: string;
+  /** Порт для подключения через CDP (Chrome DevTools Protocol). Если указан — используется connectOverCDP. */
+  cdpPort?: number;
 }
 
 /** Полная конфигурация MCP Server. */
@@ -79,6 +83,8 @@ const DEFAULT_BROWSER_CONFIG: BrowserConfig = {
   downloadsPath: join(homedir(), '.vsl', 'downloads'),
   downloadTimeout: 60000,
   acceptDownloads: true,
+  userDataDir: undefined,  // Дефолт ~/.vsl/browser-profile применяется в manager.ts
+  cdpPort: 9222,           // Дефолтный CDP port для подключения множественных агентов
 };
 
 /**
@@ -143,6 +149,14 @@ export function loadConfig(): McpServerConfig {
       process.env.VSL_ACCEPT_DOWNLOADS
         ? process.env.VSL_ACCEPT_DOWNLOADS === 'true'
         : (fileConfig.browser?.acceptDownloads ?? DEFAULT_BROWSER_CONFIG.acceptDownloads),
+    userDataDir:
+      process.env.VSL_USER_DATA_DIR ||
+      fileConfig.browser?.userDataDir ||
+      DEFAULT_BROWSER_CONFIG.userDataDir,
+    cdpPort:
+      process.env.VSL_CDP_PORT
+        ? parseInt(process.env.VSL_CDP_PORT, 10)
+        : (fileConfig.browser?.cdpPort ?? DEFAULT_BROWSER_CONFIG.cdpPort),
   };
 
   return {

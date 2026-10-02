@@ -71,13 +71,6 @@ export interface SnapshotInput {
    * и метаданных scrollable {top, bottom}. Optional: обратно-совместимо.
    */
   scroll?: { x: number; y: number; width: number; height: number };
-  /**
-   * TTL кэша снапшота в миллисекундах (M1.7, синхронизация с MCP).
-   * Если ttl > 0 и URL не изменился, повторные вызовы в пределах TTL
-   * возвращают последний документ БЕЗ пересборки из DOM (оптимизация).
-   * Default: 0 (без кэша, всегда пересобирать).
-   */
-  ttl?: number;
 }
 
 /** Плоский индекс id → VslObject (обход дерева в глубину). */
@@ -106,7 +99,6 @@ export class VslSnapshotSession {
   private lastViewport: { width: number; height: number } | null = null;
   private lastDocument: VslDocument | null = null;
   private version = 0;
-  private lastSnapshotTimestamp = 0;
 
   constructor(store: CacheStore = createCacheStore()) {
     this.store = store;
@@ -122,7 +114,6 @@ export class VslSnapshotSession {
     this.lastViewport = null;
     this.lastDocument = null;
     this.version = 0;
-    this.lastSnapshotTimestamp = 0;
   }
 
   /** Возвращает последний полный документ (не diff). */
@@ -133,18 +124,6 @@ export class VslSnapshotSession {
   /** Текущая версия документа (инкрементируется при каждом diff). */
   getVersion(): number {
     return this.version;
-  }
-
-  /**
-   * Получить полный текст по txt_ref из text_blocks (lazy text loading, M1.7, DEC-026).
-   * Когда текст > 200 символов, в VSL JSON хранится только txt_preview + txt_ref,
-   * а полный текст отдаётся по запросу через этот метод.
-   *
-   * @param blockId - ID текстового блока (формат tb_xxx)
-   * @returns Полный текст или undefined если блок не найден
-   */
-  getTextBlock(blockId: string): string | undefined {
-    return this.lastDocument?.text_blocks?.[blockId];
   }
 
   /**
@@ -237,17 +216,6 @@ export class VslSnapshotSession {
     options: BuildOptions,
     input: SnapshotInput,
   ): SnapshotResult {
-    // TTL-кэш: если ttl > 0 и URL не изменился и в пределах TTL → вернуть из кэша
-    const now = Date.now();
-    const ttl = input.ttl ?? 0;
-    if (ttl > 0 && this.lastDocument !== null && this.lastUrl === input.url) {
-      const elapsed = now - this.lastSnapshotTimestamp;
-      if (elapsed <ttl) {
-        // Кэш валиден: вернуть последний документ без пересборки
-        return this.lastDocument;
-      }
-    }
-
     const nextDocument = buildVslDocument(elements, options);
 
     const firstCall = this.lastDocument === null;
@@ -260,7 +228,6 @@ export class VslSnapshotSession {
       this.lastUrl = input.url;
       this.lastViewport = { ...input.viewport };
       this.lastDocument = nextDocument;
-      this.lastSnapshotTimestamp = Date.now();
       return nextDocument;
     }
 
@@ -293,7 +260,6 @@ export class VslSnapshotSession {
     this.lastUrl = input.url;
     this.lastViewport = { ...input.viewport };
     this.lastDocument = nextDocument;
-    this.lastSnapshotTimestamp = Date.now();
     return diff;
   }
 }

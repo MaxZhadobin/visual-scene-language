@@ -236,7 +236,7 @@ describe('vsl_get_snapshot', () => {
 
     expect(result.status).toBe('success');
     expect(result.data).toBeDefined();
-    expect(mockBrowser.navigate).toHaveBeenCalledWith('https://example.com');
+    expect(mockBrowser.navigate).toHaveBeenCalledWith('https://example.com', undefined);
     expect(mockSession.snapshotFromElements).toHaveBeenCalledTimes(1);
 
     // Проверяем что viewport корректный
@@ -336,8 +336,8 @@ describe('vsl_get_snapshot', () => {
     // Первый аргумент — функция записи
     expect(typeof injectCall[0]).toBe('function');
 
-    // Второй аргумент — массив VSL объектов
-    const vslObjects = injectCall[1] as Array<Record<string, unknown>>;
+    // Второй аргумент — sessionId, третий — массив VSL объектов
+    const vslObjects = injectCall[2] as Array<Record<string, unknown>>;
     expect(Array.isArray(vslObjects)).toBe(true);
     expect(vslObjects.length).toBeGreaterThan(0);
   });

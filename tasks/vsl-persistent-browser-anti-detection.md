@@ -1,5 +1,15 @@
 # Задача: Persistent Browser с антибот-защитой для VSL
 
+## Scope (область применения)
+
+**Эта задача касается ТОЛЬКО MCP Server (Playwright).**
+
+Chrome Extension **НЕ требует** этих изменений:
+- Extension работает внутри реального Chrome пользователя
+- Cookies, localStorage, fingerprint, история — уже есть (реальный браузер)
+- `navigator.webdriver` не устанавливается (не автоматизация)
+- Антиботы не детектят автоматизацию, потому что её нет
+
 ## Проблема
 
 VSL MCP Server использует Playwright `chromium.launch()` + `browser.newContext()` без сохранения состояния. Каждый запуск создаёт чистый (ephemeral) браузер:

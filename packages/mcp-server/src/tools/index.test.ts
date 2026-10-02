@@ -68,11 +68,11 @@ describe('tools/index.ts — MCP-compliant result handling', () => {
       getDefaultSessionId: jest.fn().mockReturnValue('default'),
       getSession: jest.fn().mockReturnValue({
         sessionId: 'default',
-        browser: mockBrowser,
         session: mockSession,
         createdAt: Date.now(),
         lastAccessedAt: Date.now(),
       }),
+      getBrowserManager: jest.fn().mockReturnValue(mockBrowser),
     } as unknown as jest.Mocked<SessionManager>;
 
     // Mock config

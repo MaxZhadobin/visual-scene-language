@@ -32,6 +32,15 @@ export type SemanticMap = Map<string, SemanticAttributes>;
  */
 function buildInjectionScript(): (objects: VslObject[], semanticMap: Record<string, SemanticAttributes>) => void {
   return (objects: VslObject[], semanticMap: Record<string, SemanticAttributes>) => {
+    // Defense-in-depth: защита от undefined аргументов (может произойти при ошибке сериализации через page.evaluate)
+    if (!objects || !Array.isArray(objects)) {
+      console.warn('[VSL] injectVslIds: objects is undefined or not an array, skipping injection');
+      return;
+    }
+    if (!semanticMap || typeof semanticMap !== 'object') {
+      console.warn('[VSL] injectVslIds: semanticMap is undefined or not an object, using empty map');
+      semanticMap = {} as Record<string, SemanticAttributes>;
+    }
     /**
      * Parses VSL ID into { tag, indexPath } format.
      * Correctly handles tags with underscores (file_input, custom_widget, etc.).
@@ -150,15 +159,16 @@ export async function injectVslIdsIntoDom(
   browser: BrowserManager,
   objects: VslObject[],
   semanticMap: SemanticMap = new Map(),
+  sessionId?: string,
 ): Promise<void> {
-  const page = await browser.getPage();
+  const page = await browser.getPage(sessionId!);
   await page.waitForTimeout(50);
   // Convert Map to plain object for serialization
   const semanticMapObj: Record<string, SemanticAttributes> = {};
   for (const [key, value] of semanticMap) {
     semanticMapObj[key] = value;
   }
-  await browser.evaluate(buildInjectionScript(), objects, semanticMapObj);
+  await browser.evaluate(buildInjectionScript(), sessionId!, objects, semanticMapObj);
 }
 
 /**
@@ -172,6 +182,7 @@ export async function injectVslIdsIntoFrame(
   frame: PlaywrightFrame,
   objects: VslObject[],
   semanticMap: SemanticMap = new Map(),
+  sessionId?: string,
 ): Promise<void> {
   try {
     // Convert Map to plain object for serialization
@@ -179,7 +190,7 @@ export async function injectVslIdsIntoFrame(
     for (const [key, value] of semanticMap) {
       semanticMapObj[key] = value;
     }
-    await browser.evaluateInFrame(frame, buildInjectionScript(), objects, semanticMapObj);
+    await browser.evaluateInFrame(frame, buildInjectionScript(), sessionId!, objects, semanticMapObj);
   } catch (error) {
     console.warn('[VSL] Failed to inject data-vsl-id into iframe:', error);
   }

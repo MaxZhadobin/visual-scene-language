@@ -628,7 +628,7 @@ describe('executeAction — контракт soft-fail', () => {
     const result = await executeAction({ action: 'teleport' });
     expect(result.success).toBe(false);
     expect(result.error).toBe(
-      'Unknown action: "teleport" — must be one of VALID_ACTIONS (24 actions)',
+      'Unknown action: "teleport" — must be one of VALID_ACTIONS (28 actions)',
     );
   });
 

@@ -47,7 +47,8 @@ export async function handleNavigate(
   args: NavigateArgs,
   browser: BrowserManager,
   session: ServerSession,
-): Promise<NavigateResult> {
+  sessionId: string,
+) : Promise<NavigateResult> {
   const startTime = Date.now();
 
   try {
@@ -80,10 +81,10 @@ export async function handleNavigate(
     }
 
     // 3. Навигация
-    await browser.navigate(args.url);
+    await browser.navigate(args.url, sessionId);
 
     // 4. Получаем title страницы
-    const title = await browser.evaluate(() => document.title);
+    const title = await browser.evaluate(() => document.title, sessionId);
 
     // 5. Извлекаем snapshot новой страницы
     let snapshot: unknown;
@@ -93,7 +94,7 @@ export async function handleNavigate(
       // Общий хелпер: прямая передача функции в evaluate + РАЗВОРАЧИВАНИЕ
       // обёртки результата. Без разворачивания SDK segmentTree получает
       // объект без attributes и падает с "reading 'aria-hidden'".
-      const extraction = await extractDomTree(browser);
+      const extraction = await extractDomTree(browser, sessionId);
       const input: SnapshotInput = {
         viewport: extraction.viewport,
         url: args.url,
@@ -104,7 +105,7 @@ export async function handleNavigate(
       session.snapshotFromElements(extraction.elements, input);
       // Inject data-vsl-id attributes into DOM for execute_action
       const currentDoc = session.getSnapshot();
-      await injectVslIdsIntoDom(browser, currentDoc.objects);
+      await injectVslIdsIntoDom(browser, currentDoc.objects, new Map(), sessionId);
       // Единый пайплайн отдачи (АС[3]): вьюпорт-фильтр + дефолтный
       // detail_level 'medium' (у тула нет параметра детализации).
       const scrollContext = session.getScrollContext();
