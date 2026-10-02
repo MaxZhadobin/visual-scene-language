@@ -14,7 +14,7 @@ describe('публичное API (src/index.ts)', () => {
   });
 
   it('экспортирует версию SDK', () => {
-    expect(VslSdk.VSL_SDK_VERSION).toBe('0.1.0');
+    expect(VslSdk.VSL_SDK_VERSION).toBe('1.3.5');
   });
 
   it('реэкспортирует VSL_VERSION канона формата', () => {
