@@ -32,59 +32,59 @@ import { handleClickCoordinates } from './clickCoordinates.js';
 const VSL_TOOLS = [
   {
     name: 'vsl_get_snapshot',
-    description: 'Получить текущий VSL snapshot страницы. Возвращает VSL JSON с семантической структурой элементов. VSL (Visual Scene Language) — это JSON-представление страницы, где каждый элемент имеет: id (уникальный идентификатор, например btn_123), type (button/input/link/text/image), text (текстовое содержимое), bbox ([x,y,width,height]), children (вложенные элементы). Пример: { viewport:{width:1920,height:1080}, objects:[{id:btn_1,type:button,text:Войти,bbox:[100,200,80,30]},{id:inp_2,type:input,text:,bbox:[100,250,200,30]}] }. Использование: получите snapshot, найдите нужный элемент по id, затем используйте vsl_execute_action для взаимодействия. Lazy text loading (DEC-026): тексты длиннее 200 символов автоматически заменяются на txt_preview (первые ~50 символов) + txt_ref (ссылка вида tb_001). Полные тексты хранятся в text_blocks map. Для получения полного текста используйте vsl_get_text_block. Параметры: detail_level (low/medium/high) для фильтрации объектов, ttl (мс) для кэширования.',
+    description: 'Get the current VSL snapshot of the page. Returns a VSL JSON with the semantic structure of elements. VSL (Visual Scene Language) is a JSON representation of the page where each element has: id (unique identifier, e.g. btn_123), type (button/input/link/text/image), text (text content), bbox ([x,y,width,height]), children (nested elements). Example: { viewport:{width:1920,height:1080}, objects:[{id:btn_1,type:button,text:Sign in,bbox:[100,200,80,30]},{id:inp_2,type:input,text:,bbox:[100,250,200,30]}] }. Usage: get the snapshot, find the desired element by id, then use vsl_execute_action to interact. Lazy text loading (DEC-026): texts longer than 200 characters are automatically replaced with txt_preview (first ~50 characters) + txt_ref (reference like tb_001). Full texts are stored in the text_blocks map. Use vsl_get_text_block to retrieve the full text. Parameters: detail_level (low/medium/high) for object filtering, ttl (ms) for caching.',
     inputSchema: {
       type: 'object',
       properties: {
         url: {
           type: 'string',
-          description: 'URL страницы (опционально, если не указан — используется текущая страница)',
+          description: 'Page URL (optional, if not specified — uses the current page)',
         },
         detail_level: {
           type: 'string',
           enum: ['low', 'medium', 'high'],
-          description: "Уровень детализации snapshot. 'low': только интерактивные элементы (кнопки, ссылки, инпуты). 'medium': интерактивные + контейнеры (default). 'high': все объекты (полный DOM). Default: 'medium'.",
+          description: "Snapshot detail level. 'low': interactive elements only (buttons, links, inputs). 'medium': interactive + containers (default). 'high': all objects (full DOM). Default: 'medium'.",
         },
         ttl: {
           type: 'number',
-          description: 'TTL кэша в миллисекундах (default: 5000 = 5s). Установите 0 для отключения кэширования.',
+          description: 'Cache TTL in milliseconds (default: 5000 = 5s). Set to 0 to disable caching.',
         },
         full: {
           type: 'boolean',
-          description: 'Полный режим: возвращает весь документ без фильтров (замена удалённого тула полного снапшота)',
+          description: 'Full mode: returns the entire document without filters (replacement for the removed full snapshot tool)',
         },
       },
     },
   },
   {
     name: 'vsl_execute_action',
-    description: 'Выполнить действие над элементом VSL. Найдите элемент по id в snapshot (vsl_get_snapshot), затем вызовите это действие. Поддерживаемые действия: click (клик по элементу), type (ввод текста, требует value), fill (алиас type, ввод текста, требует value), scroll (прокрутка, формат: "up", "down", "left", "right" или "dir:amount", например "down:300"), select (выбор опции, требует value), hover, focus, blur, check, uncheck, press (нажатие клавиши на клавиатуре, требует value — название клавиши, например "Enter", "Tab", "Escape", "ArrowDown", "ArrowUp", "Space", "Backspace". Используется для отправки форм через Enter, навигации через Tab, закрытия модалок через Escape и т.д.), upload (загрузка файла, требует value — путь к файлу или список путей через запятую). Пример: {action:click, target_id:btn_1} или {action:type, target_id:inp_2, value:hello@mail.com} или {action:fill, target_id:inp_2, value:hello@mail.com} или {action:press, target_id:inp_1, value:Enter} или {action:upload, target_id:file_input_0, value:/path/to/file.pdf}. Параметр return_state=true возвращает diff и snapshot после действия.',
+    description: 'Execute an action on a VSL element. Find the element by id in the snapshot (vsl_get_snapshot), then call this action. Supported actions: click (click on element), type (enter text, requires value), fill (alias for type, enter text, requires value), scroll (scroll, format: "up", "down", "left", "right" or "dir:amount", e.g. "down:300"), select (select option, requires value), hover, focus, blur, check, uncheck, press (press a keyboard key, requires value — key name, e.g. "Enter", "Tab", "Escape", "ArrowDown", "ArrowUp", "Space", "Backspace". Used for submitting forms via Enter, navigating via Tab, closing modals via Escape, etc.), upload (file upload, requires value — file path or comma-separated list of paths). Example: {action:click, target_id:btn_1} or {action:type, target_id:inp_2, value:hello@mail.com} or {action:fill, target_id:inp_2, value:hello@mail.com} or {action:press, target_id:inp_1, value:Enter} or {action:upload, target_id:file_input_0, value:/path/to/file.pdf}. Parameter return_state=true returns diff and snapshot after the action.',
     inputSchema: {
       type: 'object',
       properties: {
         action: {
           type: 'string',
-          description: 'Имя действия (click, type, fill, scroll, select, и др.)',
+          description: 'Action name (click, type, fill, scroll, select, etc.)',
         },
         target_id: {
           type: 'string',
-          description: 'ID элемента-цели в VSL JSON',
+          description: 'Target element ID in VSL JSON',
         },
         value: {
           type: 'string',
-          description: 'Значение для действия (например, текст для type/fill, опция для select)',
+          description: 'Value for the action (e.g. text for type/fill, option for select)',
         },
         return_state: {
           type: 'boolean',
-          description: 'Если true, возвращает diff и snapshot после действия. Полезно для отслеживания изменений DOM без дополнительного вызова vsl_get_diff. Default: true — всегда возвращать состояние для экономии ходов агента. Установите false для отключения.',
+          description: 'If true, returns diff and snapshot after the action. Useful for tracking DOM changes without an additional vsl_get_diff call. Default: true — always return state to save agent steps. Set to false to disable.',
         },
         timeout: {
           type: 'number',
-          description: 'Таймаут ожидания завершения скачивания в мс (только для действия download)',
+          description: 'Download completion timeout in ms (only for download action)',
         },
         save_path: {
           type: 'string',
-          description: 'Путь для сохранения скачанного файла (только для действия download)',
+          description: 'Path to save the downloaded file (only for download action)',
         },
       },
       required: ['action', 'target_id'],
@@ -92,13 +92,13 @@ const VSL_TOOLS = [
   },
   {
     name: 'vsl_navigate',
-    description: 'Перейти по URL в браузере. Используйте для открытия новой страницы перед получением snapshot. Пример: {url:"https://example.com"}. Возвращает {status:"success"} или {status:"error", message:"..."}. После навигации вызовите vsl_get_snapshot для получения структуры страницы.',
+    description: 'Navigate to a URL in the browser. Use this to open a new page before getting a snapshot. Example: {url:"https://example.com"}. Returns {status:"success"} or {status:"error", message:"..."}. After navigation, call vsl_get_snapshot to get the page structure.',
     inputSchema: {
       type: 'object',
       properties: {
         url: {
           type: 'string',
-          description: 'URL для навигации',
+          description: 'URL to navigate to',
         },
       },
       required: ['url'],
@@ -106,7 +106,7 @@ const VSL_TOOLS = [
   },
   {
     name: 'vsl_clear_cache',
-    description: 'Сбросить кэш VSL snapshot. Используйте когда нужно получить свежий snapshot страницы с нуля (например, после значительных изменений на странице или при переходе на другой сайт). Пример: {}. Следующий вызов vsl_get_snapshot создаст новый snapshot.',
+    description: 'Clear the VSL snapshot cache. Use when you need a fresh snapshot from scratch (e.g. after significant page changes or when switching to a different site). Example: {}. The next vsl_get_snapshot call will create a new snapshot.',
     inputSchema: {
       type: 'object',
       properties: {},
@@ -114,17 +114,17 @@ const VSL_TOOLS = [
   },
   {
     name: 'vsl_get_visual',
-    description: 'Получить visual fragment (скриншот) элемента в формате base64 WebP. Используйте для элементов, которые сложно классифицировать по тексту (иконки, графики, кастомные виджеты). Возвращает {mediaType:image/webp, data:base64data}. Пример: {element_id: img_5}. Параметр auto_refresh=true автоматически обновляет snapshot перед поиском элемента. ВАЖНО: работает только с ID из vsl_get_snapshot (browser DOM). НЕ работает с ID из vsl_read_page (semantic IDs) — используйте vsl_get_snapshot для получения совместимых ID.',
+    description: 'Get a visual fragment (screenshot) of an element in base64 WebP format. Use for elements that are hard to classify by text alone (icons, charts, custom widgets). Returns {mediaType:image/webp, data:base64data}. Example: {element_id: img_5}. Parameter auto_refresh=true automatically refreshes the snapshot before searching for the element. IMPORTANT: works only with IDs from vsl_get_snapshot (browser DOM). Does NOT work with IDs from vsl_read_page (semantic IDs) — use vsl_get_snapshot to get compatible IDs.',
     inputSchema: {
       type: 'object',
       properties: {
         element_id: {
           type: 'string',
-          description: 'ID элемента в VSL JSON',
+          description: 'Element ID in VSL JSON',
         },
         auto_refresh: {
           type: 'boolean',
-          description: 'Если true, автоматически обновляет snapshot перед поиском элемента. Полезно после навигации или действий, которые изменяют DOM. Default: false.',
+          description: 'If true, automatically refreshes the snapshot before searching for the element. Useful after navigation or actions that modify the DOM. Default: false.',
         },
       },
       required: ['element_id'],
@@ -132,17 +132,17 @@ const VSL_TOOLS = [
   },
   {
     name: 'vsl_read_page',
-    description: 'Чтение веб-страниц. Автоматически определяет стратегию: статические страницы читаются через HTTP (быстро), SPA рендерятся через браузер. readable=true фильтрует шум (навигация, футеры, cookie-баннеры) для чистого контента. При повторных вызовах возвращает diff (изменения), а не полный контент. Параметр detail_level (low/medium/high) фильтрует объекты в snapshot: low — только интерактивные элементы (кнопки, ссылки, инпуты), medium — интерактивные + контейнеры (по умолчанию), high — все объекты. В metadata возвращается vsl_estimated_tokens — количество токенов в VSL snapshot для оценки контекста. Пример: {url:"https://example.com", readable:true, detail_level:"medium"}. Возвращает snapshot и diff автоматически.',
+    description: 'Read web pages. Automatically determines the strategy: static pages are read via HTTP (fast), SPAs are rendered via browser. readable=true filters noise (navigation, footers, cookie banners) for clean content. On repeated calls, returns diff (changes) instead of full content. Parameter detail_level (low/medium/high) filters objects in the snapshot: low — interactive elements only (buttons, links, inputs), medium — interactive + containers (default), high — all objects. Metadata includes vsl_estimated_tokens — the number of tokens in the VSL snapshot for context estimation. Example: {url:"https://example.com", readable:true, detail_level:"medium"}. Returns snapshot and diff automatically.',
     inputSchema: {
       type: 'object',
       properties: {
         url: {
           type: 'string',
-          description: 'URL страницы для чтения',
+          description: 'Page URL to read',
         },
         readable: {
           type: 'boolean',
-          description: 'Readable-режим: фильтрация шума (nav, footer, cookie banners) для чистого контента',
+          description: 'Readable mode: filter noise (nav, footer, cookie banners) for clean content',
         },
       },
       required: ['url'],
@@ -150,13 +150,13 @@ const VSL_TOOLS = [
   },
   {
     name: 'vsl_get_text_block',
-    description: 'Получить полный текст по txt_ref из lazy text loading (M1.7). Когда текст элемента > 200 символов, в VSL JSON хранится только txt_preview (первые ~50 символов) и txt_ref (например, tb_001). Используйте этот tool для получения полного текста. Пример: {block_id: "tb_001"}. Возвращает {block_id, text} с полным содержимым.',
+    description: 'Get the full text by txt_ref from lazy text loading (M1.7). When an element\'s text exceeds 200 characters, only txt_preview (first ~50 characters) and txt_ref (e.g. tb_001) are stored in the VSL JSON. Use this tool to retrieve the full text. Example: {block_id: "tb_001"}. Returns {block_id, text} with the full content.',
     inputSchema: {
       type: 'object',
       properties: {
         block_id: {
           type: 'string',
-          description: 'ID текстового блока из txt_ref поля VSL объекта (формат tb_xxx)',
+          description: 'Text block ID from the txt_ref field of a VSL object (format: tb_xxx)',
         },
       },
       required: ['block_id'],
@@ -164,30 +164,30 @@ const VSL_TOOLS = [
   },
   {
     name: 'vsl_click_coordinates',
-    description: 'Выполнить множественные клики по координатам относительно целевого элемента. Координаты (x, y) задаются в пикселях от левого верхнего угла элемента (используйте bbox из snapshot). Поддерживает задержки между кликами. Возвращает diff + snapshot + screenshot после всех кликов. Пример: {target_id: "iframe_2", clicks: [{x: 50, y: 50, delay_after_ms: 500}, {x: 150, y: 50}]}.',
+    description: 'Perform multiple clicks at coordinates relative to a target element. Coordinates (x, y) are specified in pixels from the top-left corner of the element (use bbox from snapshot). Supports delays between clicks. Returns diff + snapshot + screenshot after all clicks. Example: {target_id: "iframe_2", clicks: [{x: 50, y: 50, delay_after_ms: 500}, {x: 150, y: 50}]}.',
     inputSchema: {
       type: 'object',
       properties: {
         target_id: {
           type: 'string',
-          description: 'ID элемента в VSL JSON (например, iframe_2 для reCAPTCHA challenge iframe)',
+          description: 'Element ID in VSL JSON (e.g. iframe_2 for reCAPTCHA challenge iframe)',
         },
         clicks: {
           type: 'array',
-          description: 'Массив кликов. Каждый клик: {x: number, y: number, delay_after_ms?: number}. Координаты в пикселях от левого верхнего угла элемента.',
+          description: 'Array of clicks. Each click: {x: number, y: number, delay_after_ms?: number}. Coordinates in pixels from the top-left corner of the element.',
           items: {
             type: 'object',
             properties: {
-              x: { type: 'number', description: 'X координата (pixels от левого края элемента)' },
-              y: { type: 'number', description: 'Y координата (pixels от верхнего края элемента)' },
-              delay_after_ms: { type: 'number', description: 'Задержка после клика (мс)' },
+              x: { type: 'number', description: 'X coordinate (pixels from left edge of element)' },
+              y: { type: 'number', description: 'Y coordinate (pixels from top edge of element)' },
+              delay_after_ms: { type: 'number', description: 'Delay after click (ms)' },
             },
             required: ['x', 'y'],
           },
         },
         return_state: {
           type: 'boolean',
-          description: 'Если true (default), возвращает diff + snapshot + screenshot после всех кликов.',
+          description: 'If true (default), returns diff + snapshot + screenshot after all clicks.',
         },
       },
       required: ['target_id', 'clicks'],

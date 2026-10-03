@@ -42,7 +42,7 @@ function ok(msg) { log(`${C.green}✅ ${msg}${C.reset}`); }
 function warn(msg) { log(`${C.yellow}⚠️  ${msg}${C.reset}`); }
 function fail(msg) { log(`${C.red}❌ ${msg}${C.reset}`); }
 function info(msg) { log(`${C.blue}ℹ️  ${msg}${C.reset}`); }
-function step(n, msg) { log(`\n${C.bold}${C.cyan}Шаг ${n}.${C.reset} ${C.bold}${msg}${C.reset}`); }
+function step(n, msg) { log(`\n${C.bold}${C.cyan}Step ${n}.${C.reset} ${C.bold}${msg}${C.reset}`); }
 
 // ─── Readline helpers ─────────────────────────────────────────────────────────
 
@@ -65,18 +65,18 @@ async function askYesNo(question, defaultAnswer = 'y') {
 // ─── Step 1: Node.js version check ───────────────────────────────────────────
 
 function checkNodeVersion() {
-  step(1, 'Проверка Node.js');
+  step(1, 'Checking Node.js');
 
   const major = parseInt(process.versions.node.split('.')[0], 10);
   const full = process.versions.node;
 
   if (major >= 18) {
-    ok(`Node.js v${full} — подходит (>= 18)`);
+    ok(`Node.js v${full} — OK (>= 18)`);
     return true;
   } else {
-    fail(`Node.js v${full} — требуется >= 18`);
-    log(`   Установите Node.js 18+: ${C.dim}https://nodejs.org/${C.reset}`);
-    log(`   Или используйте nvm: ${C.dim}nvm install 18 && nvm use 18${C.reset}`);
+    fail(`Node.js v${full} — requires >= 18`);
+    log(`   Install Node.js 18+: ${C.dim}https://nodejs.org/${C.reset}`);
+    log(`   Or use nvm: ${C.dim}nvm install 18 && nvm use 18${C.reset}`);
     return false;
   }
 }
@@ -115,42 +115,42 @@ function checkChromiumInstalled() {
 }
 
 async function setupPlaywright() {
-  step(2, 'Playwright (для браузерных инструментов)');
+  step(2, 'Playwright (for browser tools)');
 
   // Проверяем, установлен ли playwright как пакет
   const pwPackageInstalled = checkPlaywrightInstalled();
 
   if (!pwPackageInstalled) {
-    info('Playwright не установлен как пакет');
-    const installPw = await askYesNo('📦 Установить Playwright?');
+    info('Playwright is not installed as a package');
+    const installPw = await askYesNo('📦 Install Playwright?');
     if (!installPw) {
-      warn('Пропущено. Статические страницы (HTTP-режим) будут работать без Playwright.');
-      info(`Установить позже: ${C.dim}npm install playwright && npx playwright install chromium${C.reset}`);
+      warn('Skipped. Static pages (HTTP mode) will work without Playwright.');
+      info(`Install later: ${C.dim}npm install playwright && npx playwright install chromium${C.reset}`);
       return false;
     }
 
-    log(`   ${C.dim}Устанавливаю playwright...${C.reset}`);
+    log(`   ${C.dim}Installing playwright...${C.reset}`);
     try {
       execSync('npm install playwright', { stdio: 'inherit', timeout: 120000 });
-      ok('Playwright пакет установлен');
+      ok('Playwright package installed');
     } catch (error) {
-      fail(`Не удалось установить playwright: ${error.message}`);
+      fail(`Failed to install playwright: ${error.message}`);
       return false;
     }
   } else {
-    ok('Playwright пакет уже установлен');
+    ok('Playwright package is already installed');
   }
 
   // Проверяем, установлен ли chromium браузер
-  info('Проверяю браузер chromium...');
+  info('Checking chromium browser...');
   try {
     // Просто пробуем установить — если уже установлен, playwright скажет "already installed"
     log(`   ${C.dim}npx playwright install chromium...${C.reset}`);
     execSync('npx playwright install chromium', { stdio: 'inherit', timeout: 180000 });
-    ok('Chromium готов');
+    ok('Chromium is ready');
   } catch (error) {
-    warn(`Не удалось установить chromium: ${error.message}`);
-    info(`Попробуйте вручную: ${C.dim}npx playwright install chromium${C.reset}`);
+    warn(`Failed to install chromium: ${error.message}`);
+    info(`Try manually: ${C.dim}npx playwright install chromium${C.reset}`);
     return false;
   }
 
@@ -173,7 +173,7 @@ function loadOrCreateConfig(configPath) {
     try {
       return JSON.parse(readFileSync(configPath, 'utf-8'));
     } catch {
-      warn('Не удалось прочитать существующий config.json, создаю новый');
+      warn('Failed to read existing config.json, creating a new one');
     }
   }
   return {};
@@ -186,7 +186,7 @@ function saveConfig(configPath, config) {
 // ─── Step 6: Output agent instructions ───────────────────────────────────────
 
 function printAgentInstructions(visionConfig) {
-  step(6, 'Подключение к агенту');
+  step(6, 'Connecting to your agent');
 
   const mcpServerPath = join(process.cwd(), 'dist', 'index.js');
   const hasLocalDist = existsSync(mcpServerPath);
@@ -218,10 +218,10 @@ function printAgentInstructions(visionConfig) {
 
   log('');
   log(`${C.bold}═══════════════════════════════════════════════════════════${C.reset}`);
-  log(`${C.bold}  Настройка MCP-сервера в вашем агенте${C.reset}`);
+  log(`${C.bold}  Configure MCP server in your agent${C.reset}`);
   log(`${C.bold}═══════════════════════════════════════════════════════════${C.reset}`);
   log('');
-  log(`${C.bold}Local (stdio) конфигурация:${C.reset}`);
+  log(`${C.bold}Local (stdio) configuration:${C.reset}`);
   log('');
   log(`  ${C.bold}Server Name:${C.reset}  vsl`);
 
@@ -242,7 +242,7 @@ function printAgentInstructions(visionConfig) {
   }
 
   log('');
-  log(`${C.dim}── Или JSON-конфиг ──${C.reset}`);
+  log(`${C.dim}── Or JSON config ──${C.reset}`);
   log('');
 
   const jsonConfig = {
@@ -259,14 +259,14 @@ function printAgentInstructions(visionConfig) {
   log(`  ${C.dim}${JSON.stringify(jsonConfig, null, 2).split('\n').join('\n  ')}${C.reset}`);
 
   log('');
-  log(`${C.dim}── Куда вставить ──${C.reset}`);
+  log(`${C.dim}── Where to paste ──${C.reset}`);
   log('');
   log(`  ${C.bold}Cline:${C.reset}        VS Code → Settings → Cline → MCP Servers → Add Server`);
   log(`  ${C.bold}Claude Desktop:${C.reset} ~/Library/Application Support/Claude/claude_desktop_config.json`);
   log(`  ${C.bold}TaoCoder:${C.reset}     .taocoder/mcp.json`);
   log(`  ${C.bold}Cursor:${C.reset}       .cursor/mcp.json`);
   log('');
-  log(`${C.dim}💡 Если вы настроили vision через ~/.vsl/config.json, env vars можно не указывать.${C.reset}`);
+  log(`${C.dim}💡 If you configured vision via ~/.vsl/config.json, you don\'t need to specify env vars.${C.reset}`);
   log('');
 }
 
@@ -274,13 +274,13 @@ function printAgentInstructions(visionConfig) {
 
 async function main() {
   log('');
-  log(`${C.bold}🚀 VSL MCP Server — установка${C.reset}`);
+  log(`${C.bold}🚀 VSL MCP Server — Setup${C.reset}`);
   log('');
-  log('Этот скрипт поможет вам:');
-  log('  1. Проверить Node.js');
-  log('  2. Установить Playwright (для браузерных инструментов)');
-  log('  3. Сохранить конфигурацию');
-  log('  4. Получить инструкции для подключения к агенту');
+  log('This script will help you:');
+  log('  1. Check Node.js');
+  log('  2. Install Playwright (for browser tools)');
+  log('  3. Save configuration');
+  log('  4. Get instructions for connecting to your agent');
   log('');
 
   // Шаг 1: Node.js
@@ -292,23 +292,23 @@ async function main() {
   await setupPlaywright();
 
   // Шаг 3: Сохранение конфига
-  step(3, 'Сохранение конфигурации');
+  step(3, 'Saving configuration');
 
   const configPath = join(ensureConfigDir(), 'config.json');
   const config = loadOrCreateConfig(configPath);
   saveConfig(configPath, config);
-  ok(`Конфигурация сохранена: ${configPath}`);
+  ok(`Configuration saved: ${configPath}`);
 
   // Шаг 4: Инструкции
   printAgentInstructions(null);
 
   // Финал
-  log(`${C.bold}✨ Готово!${C.reset}`);
+  log(`${C.bold}✨ Done!${C.reset}`);
   log('');
-  log('Далее:');
-  log(`  1. Добавьте MCP-сервер в ваш агент (инструкции выше)`);
-  log(`  2. Перезапустите агент`);
-  log(`  3. Используйте инструменты: vsl_read_page, vsl_get_snapshot, vsl_execute_action, ...`);
+  log('Next steps:');
+  log(`  1. Add the MCP server to your agent (instructions above)`);
+  log(`  2. Restart your agent`);
+  log(`  3. Use tools: vsl_read_page, vsl_get_snapshot, vsl_execute_action, ...`);
   log('');
 
   rl.close();
@@ -316,7 +316,7 @@ async function main() {
 
 // Запуск
 main().catch((error) => {
-  fail(`Ошибка: ${error.message}`);
+  fail(`Error: ${error.message}`);
   rl.close();
   process.exit(1);
 });

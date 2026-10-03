@@ -151,4 +151,4 @@ export type {
 } from './security/promptInjectionFilter';
 export { RemotePatternsLoader } from './security/remotePatternsLoader';
 export type { RemotePatternsLoaderOptions, RemotePatternsResult } from './security/remotePatternsLoader';
-export const VSL_SDK_VERSION = '1.3.5';
+export const VSL_SDK_VERSION = '1.3.6';

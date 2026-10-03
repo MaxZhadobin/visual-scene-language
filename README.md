@@ -66,6 +66,57 @@ A Chrome extension (Manifest V3) that runs VSL capture and action execution dire
 npm install @thinkingos/vsl-sdk
 Requires Node.js 18 or later.
 
+### MCP Server Installation
+
+The VSL MCP server enables AI agents (Claude Desktop, Cline, TaoCoder, Cursor, etc.) to interact with web pages through VSL.
+
+**1. Install the MCP server:**
+
+npm install @thinkingos/vsl-mcp-server
+**2. Run the setup script:**
+
+npx @thinkingos/vsl-mcp-server setup
+The setup script will:
+- Check Node.js version (requires >= 18)
+- Install Playwright and Chromium browser (for browser-based tools)
+- Save configuration to `~/.vsl/config.json`
+- Output agent connection instructions
+
+**3. Configure your agent:**
+
+Add the following JSON configuration to your agent's MCP settings:
+
+{
+  "mcpServers": {
+    "vsl": {
+      "command": "npx",
+      "args": ["@thinkingos/vsl-mcp-server"]
+    }
+  }
+}
+**Agent-specific configuration paths:**
+- **Cline:** VS Code → Settings → Cline → MCP Servers → Add Server
+- **Claude Desktop:** `~/Library/Application Support/Claude/claude_desktop_config.json`
+- **TaoCoder:** `.taocoder/mcp.json`
+- **Cursor:** `.cursor/mcp.json`
+
+**Optional: Vision API configuration**
+
+If you want to use vision-based tools (vsl_get_visual), add environment variables for your vision provider:
+
+{
+  "mcpServers": {
+    "vsl": {
+      "command": "npx",
+      "args": ["@thinkingos/vsl-mcp-server"],
+      "env": {
+        "OPENAI_API_KEY": "your-openai-api-key"
+      }
+    }
+  }
+}
+Supported vision providers: OpenAI (`OPENAI_API_KEY`), Anthropic (`ANTHROPIC_API_KEY`), or custom (`VSL_VISION_PROVIDER=custom`, `VSL_VISION_BASE_URL`, `VSL_VISION_API_KEY`, `VSL_VISION_MODEL`).
+
 ---
 
 ## Package Exports
@@ -92,6 +143,7 @@ Static elements are cached by content hash and coordinate hash after the first s
 ### Visual Fragments and Screenshots
 
 When structural data alone is not sufficient, the AI agent can request a screenshot of the full screen or of a specific element identified in the VSL document. Each element in the VSL JSON carries a unique ID — the agent passes this ID to retrieve a visual fragment (image, canvas, or custom widget) as a base64-encoded WebP image. This allows the agent to fall back to pixel-level inspection only when needed, while keeping the default workflow fully semantic.
+
 ### Action Execution
 
 Actions returned by the LLM are resolved against the live DOM. The executor maps semantic object IDs to actual DOM elements, performs the requested interaction, and returns a structured result indicating success or failure.

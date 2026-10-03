@@ -49,6 +49,6 @@ describe('M1.3 публичное API (smoke, AC[6])', () => {
     expect(sdk.buildSystemPrompt()).toContain('execute_action');
     expect(sdk.buildUserPrompt(MIN_DOC, 'g')).toContain('User goal: g');
     expect(typeof sdk.retryWithBackoff).toBe('function');
-    expect(sdk.VSL_SDK_VERSION).toBe('1.3.5');
+    expect(sdk.VSL_SDK_VERSION).toBe('1.3.6');
   });
 });
