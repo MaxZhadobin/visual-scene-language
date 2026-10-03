@@ -2,4 +2,4 @@
  * Версия MCP Server.
  * Синхронизирована с package.json.
  */
-export const VSL_MCP_SERVER_VERSION = '1.3.6';
+export const VSL_MCP_SERVER_VERSION = '1.3.7';
