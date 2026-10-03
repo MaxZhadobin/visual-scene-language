@@ -84,13 +84,13 @@ describe('MCP Resources', () => {
         {
           uri: 'vsl://current',
           name: 'Current VSL Snapshot',
-          description: 'Текущий VSL snapshot страницы. Содержит полную семантическую структуру элементов.',
+          description: 'Current VSL snapshot of the page. Contains the full semantic structure of elements.',
           mimeType: 'application/json',
         },
         {
           uri: 'vsl://diff',
           name: 'Latest VSL Diff',
-          description: 'Последний VSL diff с момента предыдущего snapshot. Содержит только изменения (added/modified/removed).',
+          description: 'Latest VSL diff since the previous snapshot. Contains only changes (added/modified/removed).',
           mimeType: 'application/json',
         },
       ],
