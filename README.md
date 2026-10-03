@@ -1,90 +1,37 @@
-# Visual Scene Language (VSL) SDK
+# Visual Scene Language (VSL)
 
-Visual Scene Language (VSL) is a JSON-based format and TypeScript SDK for AI agents that interact with screen content. It provides a structured, semantic representation of visual scenes — replacing raw pixel screenshots with compact, machine-readable JSON that language models can interpret directly.
+**VSL (Visual Scene Language)** is a JSON format and set of tools for AI agents working with web pages.
 
-VSL is not a UI application or a rendering engine. It is an infrastructure layer (middleware) that sits between the screen and the LLM, enabling computer use agents to understand, navigate, and act on visual interfaces through semantic structure rather than pixel analysis.
-
----
+Instead of sending bulky screenshots (1–2 MB) to a language model, VSL extracts the **semantic structure** of a page and represents it as a compact JSON document (10–100 KB). The language model receives a structured description of elements — buttons, input fields, links, containers — with their types, positions, sizes, and states.
 
 ## How It Works
 
-Instead of sending full-page screenshots (1-2 MB) to an LLM on every interaction cycle, VSL extracts the semantic structure of the screen through DOM and accessibility APIs, then produces a compact JSON document (10-100 KB) containing:
-
-- A canvas descriptor (viewport dimensions, coordinate system)
-- A tree of semantic objects (buttons, text fields, containers, links, etc.) with types, positions, sizes, states, and available actions
-- Visual fragments only for elements that cannot be described through structural data alone (images, canvas elements, custom widgets)
-
-The LLM receives this JSON, reasons about the scene, and returns an action (click, type, scroll, navigate). The SDK executes the action against the DOM, and the cycle repeats — with subsequent snapshots transmitted as diffs rather than full documents.
-
----
-
-## Repository Structure
-
-visual-scene-language/
-  src/                  Core SDK source code
-  extension/            Chrome browser extension (Manifest V3)
-  packages/
-    mcp-server/         Model Context Protocol server for VSL
-  tests/                Integration and extension tests
-  scripts/              Demo and utility scripts
-### Core SDK (`src/`)
-
-The SDK is organized into six modules, each corresponding to a stage of the capture-to-action pipeline:
-
-| Module | Path | Responsibility |
-|---|---|---|
-| **Capture** | `src/capture/` | DOM tree extraction, element metadata, computed styles, bounding rectangles |
-| **Segmentation** | `src/segmentation/` | Multi-level semantic classification (tag-based, ARIA role, CSS heuristic, structural, vision-assisted) |
-| **Builder** | `src/builder/` | Assembles segmented elements into a VSL JSON document |
-| **Cache & Diff** | `src/cache/`, `src/diff/`, `src/session/` | Content-hash and coordinate-hash caching, mutation observer invalidation, diff engine, snapshot sessions |
-| **Action Executor** | `src/executor/` | Resolves target IDs to DOM elements and executes actions (click, type, scroll, navigate, select, etc.) |
-| **Vision** | `src/vision/` | Visual fragment extraction, vision-based enrichment, LLM vision classifier |
-
-### MCP Server (`packages/mcp-server/`)
-
-A standalone Model Context Protocol server that exposes VSL capabilities as tools for any MCP-compatible AI agent. Available tools:
-
-- `vsl_get_snapshot` — capture the current page as a VSL JSON document
-- `vsl_get_diff` — retrieve only the changes since the last snapshot
-- `vsl_execute_action` — execute an action (click, type, scroll, navigate) on the page
-- `vsl_navigate` — navigate the browser to a specified URL
-- `vsl_read_page` — hybrid page reader (HTTP-first for static pages, headless browser for SPAs)
-- `vsl_get_text_block` — retrieve a cached long-form text block by reference ID
-- `vsl_get_visual` — retrieve a visual fragment (image/canvas) by reference ID
-- `vsl_get_full_json` — retrieve the complete VSL document without diff compression
-- `vsl_clear_cache` — invalidate the snapshot cache
-- `vsl_download` — download a resource from the page
-
-### Browser Extension (`extension/`)
-
-A Chrome extension (Manifest V3) that runs VSL capture and action execution directly in the browser. It provides a content script for DOM interaction and a popup interface for controlling the agent session.
-
----
+Web page → VSL extracts structure → Compact JSON → AI agent makes decision → Action → New snapshot
+VSL acts as a mediator between the browser and the AI agent:
+1. **Structure extraction** — VSL analyzes the page DOM and extracts semantic objects (buttons, fields, links, etc.)
+2. **Compact representation** — each element receives a unique ID, type, position, and text
+3. **Actions** — the agent selects an element by ID and performs an action (click, text input, scroll)
+4. **Updates** — after the first snapshot, subsequent ones are transmitted as diffs (changes only), saving 60–80% of tokens
 
 ## Installation
 
-npm install @thinkingos/vsl-sdk
-Requires Node.js 18 or later.
-
-### MCP Server Installation
-
-The VSL MCP server enables AI agents (Claude Desktop, Cline, TaoCoder, Cursor, etc.) to interact with web pages through VSL.
-
-**1. Install the MCP server:**
+### 1. Install the MCP server
 
 npm install @thinkingos/vsl-mcp-server
-**2. Run the setup script:**
+Requires Node.js 18 or later.
+
+### 2. Run the setup
 
 npx @thinkingos/vsl-mcp-server setup
 The setup script will:
-- Check Node.js version (requires >= 18)
-- Install Playwright and Chromium browser (for browser-based tools)
+- Check Node.js version
+- Install Playwright and Chromium browser
 - Save configuration to `~/.vsl/config.json`
-- Output agent connection instructions
+- Output instructions for connecting to your agent
 
-**3. Configure your agent:**
+### 3. Connect to your AI agent
 
-Add the following JSON configuration to your agent's MCP settings:
+Add the MCP server configuration to your agent's settings:
 
 {
   "mcpServers": {
@@ -94,100 +41,202 @@ Add the following JSON configuration to your agent's MCP settings:
     }
   }
 }
-**Agent-specific configuration paths:**
+**Configuration paths for different agents:**
 - **Cline:** VS Code → Settings → Cline → MCP Servers → Add Server
 - **Claude Desktop:** `~/Library/Application Support/Claude/claude_desktop_config.json`
 - **TaoCoder:** `.taocoder/mcp.json`
 - **Cursor:** `.cursor/mcp.json`
 
-**Optional: Vision API configuration**
+## Tools
 
-If you want to use vision-based tools (vsl_get_visual), add environment variables for your vision provider:
+VSL provides 8 tools for working with web pages:
+
+### vsl_get_snapshot
+
+Get the current page structure in VSL JSON format.
+
+**Parameters:**
+- `url` (optional) — page URL. If not specified, uses the current page
+- `detail_level` — detail level: `low` (interactive elements only), `medium` (interactive + containers, default), `high` (all elements)
+- `ttl` — cache time in milliseconds (default 5000)
+- `full` — return full document without filtering
+
+**Usage example:**
+{
+  "detail_level": "medium"
+}
+
+### vsl_execute_action
+
+Perform an action on a page element.
+
+**Parameters:**
+- `action` — action name
+- `target_id` — element ID from snapshot
+- `value` — value for the action (text for input, option for selection, etc.)
+- `return_state` — return updated page state after action (default true)
+
+**Supported actions:**
+- **click** — click on an element
+- **type** / **fill** — enter text into a field
+- **clear** — clear a field
+- **scroll** — scroll the page (`"up"`, `"down"`, `"left"`, `"right"` or `"down:300"` to specify pixel amount)
+- **select** — select an option from a list
+- **hover** — hover over an element
+- **focus** / **blur** — set/remove focus
+- **check** / **uncheck** — check/uncheck a checkbox
+- **press** — press a keyboard key (`"Enter"`, `"Tab"`, `"Escape"`, `"ArrowDown"`, `"ArrowUp"`, `"Space"`, `"Backspace"`)
+- **upload** — upload a file (specify file path)
+- **download** — download a file
+- **drag** / **drop** — drag and drop
+- **submit** / **reset** — submit/reset a form
+- **open** / **close** — open/close an element
+- **expand** / **collapse** — expand/collapse
+- **wait** — wait
+- **go_back** / **go_forward** — navigate back/forward
+- **refresh** — refresh the page
+
+**Examples:**
+{"action": "click", "target_id": "btn_1"}
+{"action": "type", "target_id": "inp_2", "value": "hello@mail.com"}
+{"action": "press", "target_id": "inp_1", "value": "Enter"}
+{"action": "upload", "target_id": "file_input_0", "value": "/path/to/file.pdf"}
+### vsl_navigate
+
+Navigate to the specified URL.
+
+**Parameters:**
+- `url` — page address to navigate to
+
+**Example:**
+{"url": "https://example.com"}
+### vsl_read_page
+
+Read the content of a web page. Automatically determines the strategy: static pages are read via HTTP (fast), SPAs are rendered via browser.
+
+**Parameters:**
+- `url` — page address to read
+- `readable` — read-only main content mode (without navigation, footers, cookie banners)
+
+**Example:**
+{"url": "https://example.com/article", "readable": true}
+### vsl_get_visual
+
+Get a visual fragment (screenshot) of an element in base64 WebP format. Used for elements that are difficult to classify by text alone (icons, charts, custom widgets).
+
+**Parameters:**
+- `element_id` — element ID from snapshot
+- `auto_refresh` — automatically refresh snapshot before searching for the element
+
+**Example:**
+{"element_id": "img_5"}
+### vsl_get_text_block
+
+Get the full text by reference. Long texts (more than 200 characters) are automatically replaced with a preview and reference in the main JSON. This tool returns the full text.
+
+**Parameters:**
+- `block_id` — text block ID (format `tb_xxx`)
+
+**Example:**
+{"block_id": "tb_001"}
+### vsl_click_coordinates
+
+Perform clicks at coordinates relative to an element. Coordinates are specified in pixels from the top-left corner of the element.
+
+**Parameters:**
+- `target_id` — element ID (e.g., iframe for clicking inside it)
+- `clicks` — array of clicks with coordinates and delays
+
+**Example:**
+{
+  "target_id": "iframe_2",
+  "clicks": [
+    {"x": 50, "y": 50, "delay_after_ms": 500},
+    {"x": 150, "y": 50}
+  ]
+}
+### vsl_clear_cache
+
+Clear the snapshot cache. Used when you need a fresh snapshot from scratch (after significant page changes or when switching to a different site).
+
+**Parameters:** none
+
+## Configuration
+
+After running `setup`, the configuration is saved to `~/.vsl/config.json`.
+
+**Main parameters:**
+
 
 {
-  "mcpServers": {
-    "vsl": {
-      "command": "npx",
-      "args": ["@thinkingos/vsl-mcp-server"],
-      "env": {
-        "OPENAI_API_KEY": "your-openai-api-key"
-      }
-    }
+  "browser": {
+    "headless": true,
+    "navigationTimeout": 30000,
+    "renderTimeout": 10000,
+    "downloadsPath": "~/.vsl/downloads"
   }
 }
-Supported vision providers: OpenAI (`OPENAI_API_KEY`), Anthropic (`ANTHROPIC_API_KEY`), or custom (`VSL_VISION_PROVIDER=custom`, `VSL_VISION_BASE_URL`, `VSL_VISION_API_KEY`, `VSL_VISION_MODEL`).
 
----
 
-## Package Exports
+## Usage Examples
 
-The SDK publishes dual CJS/ESM builds with TypeScript declarations:
+### Basic Workflow
 
-{
-  "import": "./dist/index.mjs",
-  "require": "./dist/index.js",
-  "types": "./dist/index.d.ts"
-}
----
+1. vsl_navigate → open a page
+2. vsl_get_snapshot → get the structure
+3. Find the desired element by ID
+4. vsl_execute_action → perform an action
+5. Repeat steps 2-4 as needed
+### Filling a Form
 
-## Key Capabilities
+// 1. Open the page
+{"tool": "vsl_navigate", "args": {"url": "https://example.com/form"}}
 
-### Snapshot Generation
+// 2. Get snapshot
+{"tool": "vsl_get_snapshot", "args": {}}
 
-The capture pipeline extracts the DOM tree, classifies each element through a multi-level segmentation algorithm (HTML tag mapping, ARIA role resolution, CSS heuristics, structural analysis, and optional vision model enrichment), and builds a VSL JSON document with semantic object types, relative coordinates, states, and available actions.
+// 3. Fill in fields
+{"tool": "vsl_execute_action", "args": {"action": "type", "target_id": "inp_name", "value": "John Doe"}}
+{"tool": "vsl_execute_action", "args": {"action": "type", "target_id": "inp_email", "value": "john@example.com"}}
 
-### Cache and Diff
+// 4. Submit the form
+{"tool": "vsl_execute_action", "args": {"action": "click", "target_id": "btn_submit"}}
+### Reading an Article
 
-Static elements are cached by content hash and coordinate hash after the first snapshot. Subsequent snapshots transmit only the differences — added, modified, and removed objects — while unchanged elements are referenced by ID. Mutation observers provide point invalidation when the DOM changes between snapshots. URL navigation triggers a full cache reset; viewport resize resets only coordinate-dependent entries.
+// 1. Read the page (fast HTTP mode)
+{"tool": "vsl_read_page", "args": {"url": "https://example.com/article", "readable": true}}
 
-### Visual Fragments and Screenshots
+// 2. If you need the full text of a long block
+{"tool": "vsl_get_text_block", "args": {"block_id": "tb_001"}}
+## Roadmap
 
-When structural data alone is not sufficient, the AI agent can request a screenshot of the full screen or of a specific element identified in the VSL document. Each element in the VSL JSON carries a unique ID — the agent passes this ID to retrieve a visual fragment (image, canvas, or custom widget) as a base64-encoded WebP image. This allows the agent to fall back to pixel-level inspection only when needed, while keeping the default workflow fully semantic.
+VSL is being developed in phases. The current MCP server covers **Phase 1 (Web MVP)**. Future phases:
 
-### Action Execution
+| Phase | Description | Status |
+|-------|-------------|--------|
+| **Phase 1: Web MVP** | MCP server for web pages — snapshots, actions, caching, diff | ✅ Done |
+| **Phase 2: Desktop** | Native app automation on macOS (AX API), Windows (UI Automation), Linux (AT-SPI) | Planned |
+| **Phase 3: Mobile** | Mobile app automation on iOS (VoiceOver) and Android (TalkBack) | Planned |
+| **Phase 4: Extended Domains** | 2D drawings (SVG/PDF), 3D scenes (Three.js/Babylon.js), BIM/CAD (IFC/DWG) | Planned |
+| **Phase 5: Humanization Layer** | Anti-bot bypass: human-like timing, mouse movement, typing, fingerprint rotation | Planned (next) |
+| **Phase 6: Ecosystem** | Open standard specification, community, 3rd-party integrations | Planned |
 
-Actions returned by the LLM are resolved against the live DOM. The executor maps semantic object IDs to actual DOM elements, performs the requested interaction, and returns a structured result indicating success or failure.
+### Humanization Layer (next step)
 
-### Humanization Layer
+For working with sites that have anti-automation protection (LinkedIn, banking portals, government services), a humanization layer is planned as the next development step:
 
-To operate on sites with anti-bot detection (LinkedIn, banking portals, etc.), VSL includes a Humanization Layer that sits between the Action Executor and the browser. It makes agent actions indistinguishable from human behavior by introducing configurable timing delays, Bezier-curve mouse movements, scroll randomization, human-like typing simulation, session management, and fingerprint rotation. Configuration is per-site — each domain can have its own timing profiles, action rate limits, and typing speed ranges. The overhead (+300–3000ms per action) is intentional: it mimics real human speed and rhythm.
+- **Timing** — random delays between actions that mimic human behavior
+- **Mouse movement** — Bezier curves instead of straight lines
+- **Scrolling** — random scroll patterns
+- **Text input** — random delays between keystrokes, typos with corrections
+- **Session management** — random session durations and breaks
+- **Fingerprint rotation** — changing user agent, WebGL, canvas hash
 
-### Prompt Injection Filter
-
-VSL intercepts all text extracted from the screen before it reaches the LLM. A pattern-based filter runs at the entry point of the Capture Layer — immediately after text extraction from any source (DOM, raw HTML) and before segmentation — scanning for hidden instructions embedded in `display:none` elements, alt texts, meta tags, HTML comments, and CSS content properties. Detected injections are stripped, logged, or blocked depending on severity. The pattern library supports three tiers: bundled (shipped with the SDK), remote (auto-loaded from CDN, cached locally), and custom (user-defined via configuration). This provides a defense-in-depth security layer at the middleware level.
-
----
-
-## Development
-
-npm install          # install dependencies
-npm run build        # build SDK (tsup)
-npm run test         # run unit tests (jest)
-npm run lint         # lint source (eslint)
-npm run typecheck    # type-check without emit (tsc --noEmit)
-npm run test:e2e     # end-to-end tests (playwright)
-npm run demo:cache-diff  # cache-diff demonstration
----
-
-## Documentation
-
-| Document | Description |
-|---|---|
-| `ARCHITECTURE.md` | System architecture: pipeline stages, data flow, caching strategy, diff format, action model |
-| `PRODUCT_CONCEPT.md` | Product concept: problem statement, solution overview, use cases, competitive positioning |
-| `DESIGN_SYSTEM.md` | JSON schema design principles, naming conventions, data model, API patterns |
-| `DECISIONS.md` | Architectural decisions with context and rationale |
-| `ROADMAP.md` | Implementation roadmap organized by phases and milestones |
-| `TARGET_AUDIENCE.md` | Target audience definitions and usage scenarios |
-| `README_AI.md` | Project bible for AI agents (single-document context ingestion) |
-
----
+This layer will be optional and configurable for each site separately.
 
 ## License
 
 Creative Commons Attribution 4.0 International (CC BY 4.0)
-
----
 
 ## Author
 
