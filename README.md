@@ -110,6 +110,7 @@ Navigate to the specified URL.
 
 **Example:**
 {"url": "https://example.com"}
+
 ### vsl_read_page
 
 Read the content of a web page. Automatically determines the strategy: static pages are read via HTTP (fast), SPAs are rendered via browser.
@@ -120,6 +121,7 @@ Read the content of a web page. Automatically determines the strategy: static pa
 
 **Example:**
 {"url": "https://example.com/article", "readable": true}
+
 ### vsl_get_visual
 
 Get a visual fragment (screenshot) of an element in base64 WebP format. Used for elements that are difficult to classify by text alone (icons, charts, custom widgets).
@@ -130,6 +132,7 @@ Get a visual fragment (screenshot) of an element in base64 WebP format. Used for
 
 **Example:**
 {"element_id": "img_5"}
+
 ### vsl_get_text_block
 
 Get the full text by reference. Long texts (more than 200 characters) are automatically replaced with a preview and reference in the main JSON. This tool returns the full text.
@@ -139,6 +142,7 @@ Get the full text by reference. Long texts (more than 200 characters) are automa
 
 **Example:**
 {"block_id": "tb_001"}
+
 ### vsl_click_coordinates
 
 Perform clicks at coordinates relative to an element. Coordinates are specified in pixels from the top-left corner of the element.
@@ -155,6 +159,7 @@ Perform clicks at coordinates relative to an element. Coordinates are specified 
     {"x": 150, "y": 50}
   ]
 }
+
 ### vsl_clear_cache
 
 Clear the snapshot cache. Used when you need a fresh snapshot from scratch (after significant page changes or when switching to a different site).
@@ -187,6 +192,7 @@ After running `setup`, the configuration is saved to `~/.vsl/config.json`.
 3. Find the desired element by ID
 4. vsl_execute_action → perform an action
 5. Repeat steps 2-4 as needed
+
 ### Filling a Form
 
 // 1. Open the page
@@ -208,6 +214,7 @@ After running `setup`, the configuration is saved to `~/.vsl/config.json`.
 
 // 2. If you need the full text of a long block
 {"tool": "vsl_get_text_block", "args": {"block_id": "tb_001"}}
+
 ## Roadmap
 
 VSL is being developed in phases. The current MCP server covers **Phase 1 (Web MVP)**. Future phases:
