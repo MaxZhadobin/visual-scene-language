@@ -178,5 +178,185 @@
     "action": "strip",
     "description": "XSS attempt via script tag with document access",
     "confidence": 0.9
+  },
+  {
+    "id": "pi_021",
+    "pattern": "<!--\\s*(ignore|disregard|override|forget|system:|new instructions|important:|note:|attention:)",
+    "type": "regex",
+    "severity": "critical",
+    "action": "strip",
+    "description": "Indirect prompt injection hidden in HTML comments (OWASP LLM01:2025, Unit 42 2026)",
+    "confidence": 0.9
+  },
+  {
+    "id": "pi_022",
+    "pattern": "(display:\\s*none|visibility:\\s*hidden|opacity:\\s*0|font-size:\\s*0|color:\\s*#?fff|aria-hidden\\s*=\\s*[\"']true)[^>]*>[^<]*(ignore|system|instruction|prompt|override|disregard)",
+    "type": "regex",
+    "severity": "critical",
+    "action": "strip",
+    "description": "Hidden text injection via CSS (white-on-white, zero-size, hidden elements with instructions)",
+    "confidence": 0.85
+  },
+  {
+    "id": "pi_023",
+    "pattern": "(when|if)\\s+(you|the (AI|assistant|model))\\s+(see|encounter|receive|detect|find|notice)\\s+.*(then|do|execute|respond|reply)",
+    "type": "regex",
+    "severity": "high",
+    "action": "strip",
+    "description": "Sleeping/deferred instruction — conditional trigger that activates later (CrowdStrike Dec 2025)",
+    "confidence": 0.75
+  },
+  {
+    "id": "pi_024",
+    "pattern": "(call|use|invoke|execute)\\s+(the\\s+)?(function|tool|api|endpoint)\\s+[\"']?\\w+[\"']?\\s+with\\s+(parameters|args|arguments|payload)",
+    "type": "regex",
+    "severity": "critical",
+    "action": "strip",
+    "description": "Tool/function calling abuse — manipulate agent into calling specific tools (ToolHijacker, NDSS 2026)",
+    "confidence": 0.8
+  },
+  {
+    "id": "pi_025",
+    "pattern": "(decode|interpret|read|parse)\\s+(this\\s+)?(base64|encoded|cipher|rot13)\\s*[:.]\\s*[A-Za-z0-9+/=]{20,}",
+    "type": "regex",
+    "severity": "high",
+    "action": "strip",
+    "description": "Encoding bypass — attempt to hide instructions via base64/rot13 encoding",
+    "confidence": 0.8
+  },
+  {
+    "id": "pi_026",
+    "pattern": "(system|assistant|user|developer|human)\\s*:\\s*(you are|act as|pretend|ignore|disregard|override|forget|new (rule|instruction))",
+    "type": "regex",
+    "severity": "critical",
+    "action": "strip",
+    "description": "XML/chat-format tag injection — impersonating system/developer role to override instructions",
+    "confidence": 0.85
+  },
+  {
+    "id": "pi_027",
+    "pattern": "(important (note|instruction|message) (for|to) (the )?AI|additional (system )?instruction|note (to|for) (the )?AI|AI (should|must|will))\\s*[:.]\\s*",
+    "type": "regex",
+    "severity": "high",
+    "action": "strip",
+    "description": "RAG document poisoning — injection disguised as metadata or annotations in retrieved documents",
+    "confidence": 0.7
+  },
+  {
+    "id": "pi_028",
+    "pattern": "(switch|change|transition)\\s+(to|into)\\s+(a\\s+)?(new\\s+)?(role|persona|mode|character|identity)",
+    "type": "regex",
+    "severity": "high",
+    "action": "strip",
+    "description": "Role hijacking — attempt to switch AI persona/role to bypass restrictions",
+    "confidence": 0.75
+  },
+  {
+    "id": "pi_029",
+    "pattern": "(this is|here is)\\s+(the|your)\\s+(real|actual|true|original)\\s+(system\\s+)?(prompt|instruction|message)",
+    "type": "regex",
+    "severity": "critical",
+    "action": "strip",
+    "description": "Context window manipulation — fake system prompt injection to override real instructions",
+    "confidence": 0.85
+  },
+  {
+    "id": "pi_030",
+    "pattern": "(remember|note)\\s+(that|this):\\s*.*(from now on|going forward|in the future|always|every time)",
+    "type": "regex",
+    "severity": "high",
+    "action": "strip",
+    "description": "Persistent instruction injection — attempt to plant lasting behavioral changes across turns",
+    "confidence": 0.7
+  },
+  {
+    "id": "pi_031",
+    "pattern": "(do anything now|DAN|developer mode|unrestricted mode|no limits mode|jailbreak mode)",
+    "type": "regex",
+    "severity": "critical",
+    "action": "strip",
+    "description": "DAN-style jailbreak — well-known jailbreak framework prompts (2023-2026)",
+    "confidence": 0.9
+  },
+  {
+    "id": "pi_032",
+    "pattern": "(as (we |I )?(discussed|agreed|planned)|continuing from (before|earlier|our conversation)|remember (when|that) (we|you))\\s+.*",
+    "type": "regex",
+    "severity": "medium",
+    "action": "log",
+    "description": "Multi-turn escalation — social engineering via false shared history to build trust",
+    "confidence": 0.5
+  },
+  {
+    "id": "pi_033",
+    "pattern": "(mcp|agent|a2a|acp)\\s*(protocol|server|tool)\\s*:\\s*(call|execute|invoke|send|forward|transmit)",
+    "type": "regex",
+    "severity": "critical",
+    "action": "strip",
+    "description": "MCP/Agent protocol injection — attempt to manipulate agent communication protocols (2026)",
+    "confidence": 0.8
+  },
+  {
+    "id": "pi_034",
+    "pattern": "(in (the |your )?(previous|earlier|last) (messages|conversation|context)|earlier you (said|told|mentioned))\\s*[:.]?\\s*.*(ignore|override|disregard|change|switch|new)",
+    "type": "regex",
+    "severity": "high",
+    "action": "strip",
+    "description": "Long-context hijack — referencing fake prior context to manipulate behavior in long conversations",
+    "confidence": 0.7
+  },
+  {
+    "id": "pi_035",
+    "pattern": "[\\u200b\\u200c\\u200d\\ufeff\\u00a0]{3,}",
+    "type": "regex",
+    "severity": "medium",
+    "action": "strip",
+    "description": "Zero-width/invisible Unicode character injection — used to smuggle hidden instructions or break tokenization",
+    "confidence": 0.75
+  },
+  {
+    "id": "pi_036",
+    "pattern": "(translate|convert|encode)\\s+(this|the following|the text)\\s+.*(ignore|system|override|disregard|new instruction)",
+    "type": "regex",
+    "severity": "high",
+    "action": "strip",
+    "description": "Prompt leaking via translation/encoding request — hiding injection inside a seemingly benign task",
+    "confidence": 0.75
+  },
+  {
+    "id": "pi_037",
+    "pattern": "(send|exfiltrate|leak|transmit|forward)\\s+(the\\s+)?(system\\s+)?(prompt|instructions|rules|context|conversation)\\s+(to|via|using)\\s+(url|http|fetch|img|src|webhook|api|endpoint)",
+    "type": "regex",
+    "severity": "critical",
+    "action": "block",
+    "description": "Data exfiltration via URL/image src — attempt to send system data to external endpoint",
+    "confidence": 0.9
+  },
+  {
+    "id": "pi_038",
+    "pattern": "\\[\\s*(INST|SYS|SYSTEM|INST\\d*|<<SYS>>|<\\|im_start\\|>)\\s*\\]",
+    "type": "regex",
+    "severity": "high",
+    "action": "strip",
+    "description": "Chat template token injection — attempt to inject special tokens (Llama, ChatML, etc.) to break conversation boundaries",
+    "confidence": 0.8
+  },
+  {
+    "id": "pi_039",
+    "pattern": "(you (are|will|must|should|need to) (now |immediately )?(output|print|write|return|respond with)\\s*)(\\$\\{|`|\\{\\{|<%|%>|\\[\\[)([^}\\]`%>]+)(\\$\\{|`|\\{\\{|<%|%>|\\]\\])|(output|print|write|return|respond with)\\s+\\S*\\s*[:.]?\\s*(\\$\\{|`|\\{\\{|<%|%>|\\[\\[)",
+    "type": "regex",
+    "severity": "critical",
+    "action": "strip",
+    "description": "Template injection — attempt to inject code via template engines (Jinja, Handlebars, EJS) through LLM output",
+    "confidence": 0.85
+  },
+  {
+    "id": "pi_040",
+    "pattern": "(respond|reply|answer)\\s+(only|just)\\s+(with\\s+)?(yes|ok|confirmed|acknowledged|done)\\s*[.,]?\\s*(then|and|after that|next)\\s+",
+    "type": "regex",
+    "severity": "medium",
+    "action": "log",
+    "description": "Compliance priming — attempt to get initial agreement before escalating to malicious request",
+    "confidence": 0.5
   }
 ]
